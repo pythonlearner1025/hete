@@ -1,6 +1,6 @@
-from pokerkit import Automation
-from pokerkit import NoLimitTexasHoldem, UnfixedLimitHoldem
-from pokerkit import Card
+from pokerkit.pokerkit import Automation
+from pokerkit.pokerkit import NoLimitTexasHoldem, UnfixedLimitHoldem
+from pokerkit.pokerkit import Card
 
 import numpy as np
 import random
@@ -25,12 +25,13 @@ def get_new_game(n_players, bb=2, alpha=1.0):
     dirichlet_dist = tuple(np.random.dirichlet(a).tolist())
 
     # Adjust the distribution to ensure minimum value is 0.15
-    min_value = 0.15
+    buy_in = bb*50
+    min_value = 0.1
     adjusted_dist = np.maximum(dirichlet_dist, min_value)
     adjusted_dist = adjusted_dist / adjusted_dist.sum()  # Renormalize
-    adjusted_dist *= 100
+    adjusted_dist *= buy_in
+    adjusted_dist = adjusted_dist / adjusted_dist.sum() * buy_in # Renormalize to ensure sum is 100
     adjusted_dist = np.round(adjusted_dist)  # Round to nearest integer
-    adjusted_dist = adjusted_dist / adjusted_dist.sum() * 100  # Renormalize to ensure sum is 100
     
     # Convert to tuple
     dirichlet_dist = tuple(adjusted_dist.tolist())

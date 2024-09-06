@@ -2,8 +2,8 @@ from engine import (
     get_new_game,
     is_terminal
 )
-from pokerkit import Card
-from pokerkit.state import State
+from pokerkit.pokerkit import Card
+from pokerkit.pokerkit import State
 from copy import deepcopy
 from typing import Dict, List, Union, Tuple
 from model import DeepCFRModel
@@ -15,16 +15,10 @@ import torch.nn.functional as F
 act2name = {
     0: 'fold',
     1: 'check/call',
-    2: 'cbr 0.1 stack',
-    3: 'cbr 0.2 stack',
-    4: 'cbr 0.3 stack',
-    5: 'cbr 0.4 stack',
-    6: 'cbr 0.5 stack',
-    7: 'cbr 0.6 stack',
-    8: 'cbr 0.7 stack',
-    9: 'cbr 0.8 stack',
-    10: 'cbr 0.9 stack',
-    11: 'cbr 1.0 stack'
+    2: 'cbr 0.25 stack',
+    3: 'cbr 0.5 stack',
+    4: 'cbr 0.75 stack',
+    5: 'cbr 1.0 stack'
 }
 
 def card2int(card : Card):
@@ -102,16 +96,17 @@ def prepare_infoset(
     max_bets_per_player, 
     round_bet_fracs, 
     round_bet_status, 
-    padding=0
+    padding=0,
+    n_rounds=4,
+    n_players=2
     ):
     '''
-        cards: ((1 x 2), (1 x 3)[, (1 x 1), (1 x 1)]) # (hole, board, [turn, river])
-        bet_fracs: 1 x n_bet_feats
-        bet_status: 1 x n_bet_status
+        returns:
+            cards: ((1 x 2), (1 x 3)[, (1 x 1), (1 x 1)]) # (hole, board, [turn, river])
+            bet_fracs: 1 x n_bet_feats
+            bet_status: 1 x n_bet_status
     '''
-    nrounds = 4
-    n_players = 3  # Assuming 3 players as per your code
-    nbets = n_players * max_bets_per_player * nrounds - nrounds
+    nbets = n_players * max_bets_per_player * n_rounds - n_rounds
 
     # Prepare cards
     hole_cards = torch.tensor([card2int(c) for c in hand]).unsqueeze(0)  # (1, 2)
@@ -122,6 +117,8 @@ def prepare_infoset(
     cards = [hole_cards, flop, turn, river]  # List[int]
 
     # Prepare bets
+    #print(len(round_bet_fracs))
+    #print(len(round_bet_fracs))
     betting_fracs = pad_by(round_bet_fracs, nbets-len(round_bet_fracs), padding=padding)
     betting_status = pad_by(round_bet_status, nbets-len(round_bet_status), padding=padding)
     
@@ -141,12 +138,16 @@ def get_round(n_board_cards):
         return 3
 
 def regret_match(logits):
+    logits = logits[0]
     logits = F.relu(logits)
     logits_sum = logits.sum().item()  # Convert to scalar
     if logits_sum > 0:
-        return (logits / (torch.full_like(logits, logits_sum) - logits))[0]
+        return (logits / (torch.full_like(logits, logits_sum) - logits))
     else:
-        return torch.full((len(logits),), 1.0 / len(logits))[0]
+        max_index = torch.argmax(logits)
+        one_hot = torch.zeros_like(logits)
+        one_hot[max_index] = 1
+        return one_hot
 
 def traverse(
     game : State, 
@@ -260,21 +261,22 @@ def traverse(
             round_bet_fracs, 
             round_bet_status
         ) 
-
         # TODO regret matching
         logits = net(*I)
         strat = regret_match(logits)
-        action_index = torch.multinomial(strat, num_samples=1).item()
+        try:
+            # Replace inf with 1 in the specific case mentioned
+            strat_fixed = torch.where(torch.isinf(strat), torch.tensor(1.0), strat)
+            action_index = torch.multinomial(strat_fixed, num_samples=1).item()
+        except Exception as e:
+            print("Original logits:", logits)
+            print("Original strat:", strat)
+            print("Fixed strat:", strat_fixed)
+            raise e
 
         while not verify_action(game, action_index):
             action_index = (action_index + 1) % logits.shape[-1]
 
-        # if calling is required
-        # nplayers = 3, max_bets = 3
-        # 0, 1, 2 
-        # 0, 1, 2,
-        # 0, 1, 2,
-        # c, c, c
         if action_index > 1 and \
             (len(round_bet_status) % max_bets_per_player*n_players >= max_bets_per_player*n_players): 
             action_index = 1
@@ -360,12 +362,14 @@ if __name__ == '__main__':
     H = dict() # all seen infos
     # reservoir-sampled adv memories 
     bb = 2
-    n_players = 3
-    cfr_iters = 25000
-    traversals = 4
+    n_players = 2
+    cfr_iters = 180
+    traversals = 100000
     max_bets_per_player = 6
-    batch_size = 32  # or any other suitable batch size
-    
+    batch_size = 10000  # or any other suitable batch size
+    max_train_iter = 4000
+    max_advs_size = 40*10e6
+
     all_advs = {
         p:list()
         for p in range(n_players)
@@ -383,17 +387,30 @@ if __name__ == '__main__':
         for p in range(n_players)
     }
 
+    total_advs_c = 0
+
     for t in range(1,cfr_iters+1):
-        print(f't: {t}')
         for p in range(n_players):
             p = ((n_players-1)+p) % n_players
             for k in range(traversals):
-                print(f'k: {k}')
+                print(f't: {t}, p: {p}, k: {k}, infosets: {len(all_advs[p])}')
                 traverse_advs = []
                 game = get_new_game(n_players, bb=bb)
-                # TODO pass in a weighted-sampled net instead of nets
                 traverse(game, p, traverse_advs, all_nets, t, max_bets_per_player)
-                all_advs[p].extend(traverse_advs)
+
+                # reservoir sampling if buffer cap exceeded
+                if len(all_advs[p]) >= max_advs_size:
+                    for adv in traverse_advs:
+                        if len(all_advs[p]) < max_advs_size:
+                            all_advs[p].append(adv)
+                        else:
+                            j = random.randint(0, total_advs_c)
+                            if j < max_advs_size:
+                                all_advs[p][j] = adv
+                else:
+                    all_advs[p].extend(traverse_advs)
+
+                total_advs_c += len(traverse_advs)
 
             # make sure to batch
             net = DeepCFRModel(
@@ -405,10 +422,12 @@ if __name__ == '__main__':
 
             net = net.train()
             optimizer = torch.optim.Adam(net.parameters())
-            loss_fn = torch.nn.MSELoss()
             # Use the batch_loader
             # is dataset player_advs or something else? 
-            for batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t in batch_loader(all_advs[p], batch_size):
+            for i, (batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t) in enumerate(batch_loader(all_advs[p], batch_size)):
+                if i > max_train_iter:
+                    break
+                print(f'training iter {i}')
                 outputs = net(batched_cards, batched_bet_fracs, batched_bet_status)
                 
                 # Compute MSE loss for each sample in the batch
@@ -420,6 +439,7 @@ if __name__ == '__main__':
                 # Average the loss over all samples and actions
                 loss = weighted_loss.mean()
                 
+                print(loss.item())
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -433,3 +453,12 @@ if __name__ == '__main__':
     sampled_idx = random.choices(indices, weights=probs, k=1)[0]
     p_net = all_nets[p][sampled_idx]
 '''
+
+# best response BR(strat) = max strat' payoff(strat', opp_strat)
+# where payoff(strat', opp_strat) is the expected poyoff 
+# playing according to strat' assuming opp plays deterministically following opp_strat
+
+# exploitability is defined as difference between
+# payoff(strat*, BR(strat*)) - payoff(strat, BR(strat))
+# where strat* is the Nash equilibrium strategy
+# the lower th ebetter 
