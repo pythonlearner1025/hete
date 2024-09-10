@@ -3,3 +3,5 @@ env/
 phh-dataset/
 exp/
 __pycache__/
+build/
+ompeval.cpython-312-darwin.so
