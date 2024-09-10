@@ -1,8 +1,0 @@
-identity = {player}
-round = {round}
-Number of players = {n_players}
-Stacks of each player = {stack}
-Bets of each player = {bets}
-Pot = {pot}
-actions = {actions}
-The action is on you

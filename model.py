@@ -1,3 +1,5 @@
+# from appendix C of https://arxiv.org/pdf/1811.00164 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -7,6 +7,8 @@ from pokerkit.pokerkit import State
 from copy import deepcopy
 from typing import Dict, List, Union, Tuple
 from model import DeepCFRModel
+from util import Pubset, card_to_string, all_cards, prepare_infoset
+from lbr import get_lbr_act, init_opp_range
 
 import random
 import torch
@@ -20,28 +22,6 @@ act2name = {
     4: 'cbr 0.75 stack',
     5: 'cbr 1.0 stack'
 }
-
-def card2int(card : Card):
-    """
-    Convert a card string (e.g., 'Qc', '6s', 'Jh') to integer representations.
-    
-    Returns:
-    - rank: 0-12 (2-A)
-    - suit: 0-3 (c, d, h, s)
-    - card: 0-51 (unique index for each card)
-    """
-    card_str = card.rank + card.suit
-    ranks = '23456789TJQKA'
-    suits = 'cdhs'
-    
-    rank = ranks.index(card_str[0])
-    suit = suits.index(card_str[1])
-    card = rank * 4 + suit
-    
-    return card
-
-def pad_by(round_bet_history, amt, padding=-1):
-    return round_bet_history + [padding] * amt
 
 def mbb(amt, bb):
     return amt/(bb/1000)
@@ -90,49 +70,14 @@ def verify_action(game: State, action_index):
     #print("bet is OK")
     return True
 
-def prepare_infoset(
-    hand, 
-    board, 
-    max_bets_per_player, 
-    round_bet_fracs, 
-    round_bet_status, 
-    padding=0,
-    n_rounds=4,
-    n_players=2
-    ):
-    '''
-        returns:
-            cards: ((1 x 2), (1 x 3)[, (1 x 1), (1 x 1)]) # (hole, board, [turn, river])
-            bet_fracs: 1 x n_bet_feats
-            bet_status: 1 x n_bet_status
-    '''
-    nbets = n_players * max_bets_per_player * n_rounds - n_rounds
 
-    # Prepare cards
-    hole_cards = torch.tensor([card2int(c) for c in hand]).unsqueeze(0)  # (1, 2)
-    flop = torch.tensor([card2int(c[0]) for c in board[:3]] if len(board) >= 3 else [-1]*3).unsqueeze(0)  # (1, 3)
-    turn = torch.tensor([card2int(board[3][0])] if len(board) > 3 else [-1]).unsqueeze(0)  # (1, 1)
-    river = torch.tensor([card2int(board[4][0])] if len(board) > 4 else [-1]).unsqueeze(0)  # (1, 1)
 
-    cards = [hole_cards, flop, turn, river]  # List[int]
-
-    # Prepare bets
-    #print(len(round_bet_fracs))
-    #print(len(round_bet_fracs))
-    betting_fracs = pad_by(round_bet_fracs, nbets-len(round_bet_fracs), padding=padding)
-    betting_status = pad_by(round_bet_status, nbets-len(round_bet_status), padding=padding)
-    
-    bet_fracs = torch.tensor(betting_fracs, dtype=torch.float).unsqueeze(0)  # N x (2 * nbets)
-    bet_status = torch.tensor(betting_status, dtype=torch.float).unsqueeze(0)  # N x (2 * nbets)
-
-    return cards, bet_fracs, bet_status
-
-def get_round(n_board_cards):
-    if n_board_cards == 0:
+def get_round(n_deck_cards):
+    if n_deck_cards == 0:
         return 0 
-    elif n_board_cards == 3:
+    elif n_deck_cards == 3:
         return 1
-    elif n_board_cards == 4:
+    elif n_deck_cards == 4:
         return 2
     else:
         return 3
@@ -357,18 +302,18 @@ def batch_loader(all_player_advs: List[Tuple], batch_size: int):
         yield batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t
 
 if __name__ == '__main__':
-    # perf/exploitability use unit of 1/1000 bb
-
     H = dict() # all seen infos
     # reservoir-sampled adv memories 
     bb = 2
     n_players = 2
+    n_rounds = 4
     cfr_iters = 180
     traversals = 100000
     max_bets_per_player = 6
     batch_size = 10000  # or any other suitable batch size
     max_train_iter = 4000
     max_advs_size = 40*10e6
+    eval_iters = 10000
 
     all_advs = {
         p:list()
@@ -393,6 +338,7 @@ if __name__ == '__main__':
         for p in range(n_players):
             p = ((n_players-1)+p) % n_players
             for k in range(traversals):
+                if k > 0: break
                 print(f't: {t}, p: {p}, k: {k}, infosets: {len(all_advs[p])}')
                 traverse_advs = []
                 game = get_new_game(n_players, bb=bb)
@@ -422,6 +368,7 @@ if __name__ == '__main__':
 
             net = net.train()
             optimizer = torch.optim.Adam(net.parameters())
+
             # Use the batch_loader
             # is dataset player_advs or something else? 
             for i, (batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t) in enumerate(batch_loader(all_advs[p], batch_size)):
@@ -444,21 +391,135 @@ if __name__ == '__main__':
                 loss.backward()
                 optimizer.step()
             all_nets[p].append(net)
+        
+            # evaluate
+            # what was the abstracton size & number of games in LBR mbb/h calc? 
+            # TODO force lbr to check first 2 rounds... otheriwse it all-ins 
+            # when winning against hand is expected to be 50%> prob
+            # evaluate 2 hands, rotated, for 50,000 dealings each
+            p1_hand = random.sample(list(all_cards), 2)
+            remaining_cards = all_cards - set(p1_hand)
+            p2_hand = random.sample(list(remaining_cards), 2)
+            deck_cards = remaining_cards - set(p2_hand)
+            player_idx = 0 # for 2 players for now 
 
+            for e in range(eval_iters):
+                if e >= eval_iters // 2:
+                    player_idx = 1
 
-'''
-    for free play
-    indices = list(range(t + 1))
-    probs = [i / sum(indices) for i in indices]
-    sampled_idx = random.choices(indices, weights=probs, k=1)[0]
-    p_net = all_nets[p][sampled_idx]
-'''
+                game: State = get_new_game(
+                    n_players,
+                    deck_cards=deck_cards, 
+                    player_hands=[' '.join(p1_hand), ' '.join(p2_hand)]
+                )
 
-# best response BR(strat) = max strat' payoff(strat', opp_strat)
-# where payoff(strat', opp_strat) is the expected poyoff 
-# playing according to strat' assuming opp plays deterministically following opp_strat
+                round_bet_fracs = []
+                round_bet_status = []
+                policy = all_nets[p][-1]  # get the latest net
+                pubset = Pubset(
+                    bet_fracs=round_bet_fracs,
+                    bet_status=round_bet_status,
+                    starting_stacks=game.starting_stacks,
+                    board=[card_to_string(card[0]) for card in game.board_cards],
+                    max_bets=max_bets_per_player,
+                    n_players=n_players,
+                    n_rounds=n_rounds,
+                    act2name=act2name,
+                )
+                # TODO turn into functions lots of redundant code below
+                while game.actor_index is not None or sum(game.status) > 1:
+                    round = get_round(game.deck_cards)
+                    if game.actor_index == player_idx:
+                        actor = game.actor_index
+                        hand = game.hole_cards[actor]
+                        board = game.board_cards
+                        I = prepare_infoset(
+                            hand, 
+                            board, 
+                            max_bets_per_player, 
+                            round_bet_fracs, 
+                            round_bet_status
+                        ) 
+                        # TODO regret matching
+                        logits = net(*I)
+                        strat = regret_match(logits)
+                        try:
+                            # Replace inf with 1 in the specific case mentioned
+                            strat_fixed = torch.where(torch.isinf(strat), torch.tensor(1.0), strat)
+                            action_index = torch.multinomial(strat_fixed, num_samples=1).item()
+                        except Exception as e:
+                            print("Original logits:", logits)
+                            print("Original strat:", strat)
+                            print("Fixed strat:", strat_fixed)
+                            raise e
 
-# exploitability is defined as difference between
-# payoff(strat*, BR(strat*)) - payoff(strat, BR(strat))
-# where strat* is the Nash equilibrium strategy
-# the lower th ebetter 
+                        while not verify_action(game, action_index):
+                            action_index = (action_index + 1) % logits.shape[-1]
+
+                        if action_index > 1 and \
+                            (len(round_bet_status) % max_bets_per_player*n_players >= max_bets_per_player*n_players): 
+                            action_index = 1
+
+                        take_action(game, action_index)
+
+                        # check if checking is possible
+                        round_bet_status.append(1 if action_index >= 1 else 0)
+                        # get bet frac
+                        if action_index == 0:
+                            bet_frac = 0
+                        elif action_index == 1: 
+                            if game.stacks[actor-1] + game.bets[actor-1] != 0:
+                                bet_frac = game.bets[actor-1] / (game.stacks[actor-1] + game.bets[actor-1])
+                            else:
+                                bet_frac = 0
+                        else:
+                            bet_frac = float(act2name[action_index][5:8]) 
+
+                        round_bet_fracs.append(bet_frac)
+                    else:
+                        opp_idx = player_idx
+                        player_hand = [p1_hand, p2_hand][game.actor_index]
+
+                        # update before
+                        pubset.bet_fracs = round_bet_fracs
+                        pubset.bet_status = round_bet_status
+                        pubset.board = [card_to_string(card[0]) for card in game.board_cards]
+
+                        action_index = get_lbr_act(
+                            policy,
+                            player_hand,
+                            game.actor_index,
+                            opp_idx,
+                            init_opp_range(player_hand),
+                            pubset,
+                            deck_cards=deck_cards,
+                            max_bets_per_player=max_bets_per_player
+                        )
+
+                        while not verify_action(game, action_index):
+                            action_index = (action_index + 1) % logits.shape[-1]
+
+                        if action_index > 1 and \
+                            (len(round_bet_status) % max_bets_per_player*n_players >= max_bets_per_player*n_players): 
+                            action_index = 1
+
+                            # force check if player is gonna win in showdown
+                            # do this to avoid all shoves
+                            if round < 2 and action_index == len(act2name)-1: 
+                                action_index = 1
+                        
+                        take_action(game, action_index)
+                        # check if checking is possible
+                        round_bet_status.append(1 if action_index >= 1 else 0)
+                        # get bet frac
+                        if action_index == 0:
+                            bet_frac = 0
+                        elif action_index == 1: 
+                            if game.stacks[actor-1] + game.bets[actor-1] != 0:
+                                bet_frac = game.bets[actor-1] / (game.stacks[actor-1] + game.bets[actor-1])
+                            else:
+                                bet_frac = 0
+                        else:
+                            bet_frac = float(act2name[action_index][5:8]) 
+
+                        round_bet_fracs.append(bet_frac)

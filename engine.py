@@ -1,11 +1,17 @@
 from pokerkit.pokerkit import Automation
 from pokerkit.pokerkit import NoLimitTexasHoldem, UnfixedLimitHoldem
-from pokerkit.pokerkit import Card
+from pokerkit.pokerkit import Deck, Card, State
+from collections import deque
 
 import numpy as np
-import random
 
-def get_new_game(n_players, bb=2, alpha=1.0):
+def get_new_game(
+    n_players, 
+    bb=2, 
+    alpha=1.0,
+    deck_cards=[],
+    player_hands=[]
+    ) -> State:
     # https://pokerkit.readthedocs.io/en/latest/simulation.html#pre-defined-games
     automations = (
         Automation.ANTE_POSTING,
@@ -48,32 +54,57 @@ def get_new_game(n_players, bb=2, alpha=1.0):
         n_players
     )
 
+    if deck_cards:
+        custom_deck = create_custom_deck(deck_cards)
+        custom_deck_cards = create_custom_deck_cards(deck_cards)
+        state.deck = custom_deck 
+        state.deck_cards = custom_deck_cards
+    if player_hands:    
+        state.hole_cards = [list(tuple(Card.parse(hand))) for hand in player_hands]
+
     return state
 
 def is_terminal(game, p):
     stats = game.statuses
     return not stats[p]
 
-if __name__ == '__main__':
+def create_custom_deck(card_strings: list[str]) -> tuple[Card, ...]:
+    """Create a custom deck from a list of card strings.
+
+    >>> custom_deck = create_custom_deck(['As', 'Kh', 'Qd', 'Jc'])
+    >>> custom_deck
+    (As, Kh, Qd, Jc)
+    >>> len(custom_deck)
+    4
+
+    :param card_strings: A list of card strings (e.g., ['As', 'Kh', 'Qd'])
+    :return: A tuple of Card objects
+    """
+    return tuple(Card.parse(' '.join(card_strings)))
+
+def create_custom_deck_cards(card_strings: list[str]) -> deque[Card]:
+    """Create a custom deck from a list of card strings.
+
+    >>> custom_deck = create_custom_deck(['As', 'Kh', 'Qd', 'Jc'])
+    >>> custom_deck
+    deque([As, Kh, Qd, Jc])
+    >>> len(custom_deck)
+    4
+
+    :param card_strings: A list of card strings (e.g., ['As', 'Kh', 'Qd'])
+    :return: A deque of Card objects
+    """
+    return deque(Card.parse(' '.join(card_strings)))
+
+def test():
     bb_frac = 0.02
-    game = get_new_game(3, bb_frac=bb_frac)
+    game = get_new_game(2, deck_cards=['Ac', 'Ad', '2c', '3c', '4c'])
     print(type(game))
     print(game.min_completion_betting_or_raising_to_amount)
     print(game.stacks)
     print(game.hole_cards)
     print(game.bets)
-    # blinds
-    # p1 sb, p2 bb
 
-    # preflop
-    # p3 cc, p1 cc, p2 cbr
-    # p3 cc, p1 cc,
-
-    # flop
-    # p2 cbr, p3 cbr, p1 cbr
-    # p2 cbr, p3 cbr, p1 cbr,
-    # ...  
-    # p2 cc, p3 cc
     print(game.actor_index) # action is on p3
     game.check_or_call() # p3 cc
     print(game.actor_index)
@@ -85,6 +116,8 @@ if __name__ == '__main__':
     game.check_or_call() # p1 cc
     print("flop?")
     print(game.bets)
+    print(game.deck_cards)
+    print(game.board_cards)
     # flop
     game.complete_bet_or_raise_to(0.01) #p1 cbr
     game.fold() # p2 fold
@@ -96,3 +129,8 @@ if __name__ == '__main__':
     print(game.payoffs)
     mbbs = [payoff/(bb_frac/1000) for payoff in game.payoffs]
     print(mbbs)
+
+if __name__ == '__main__':
+    test()
+    #game = get_new_game(2, remaining_cards=['Ac', 'Ad', '2c', '3c', '4c'])
+    #print(game.deck)
