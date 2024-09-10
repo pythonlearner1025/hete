@@ -2,70 +2,64 @@
 # https://arxiv.org/pdf/1612.07547
 from treys import Evaluator, Card, Deck
 from itertools import combinations
-from util import all_cards, Pubset, prepare_infoset
+from util import cards2int, int2cards, Pubset, prepare_infoset
 from math import comb
 from tqdm import tqdm
 from copy import deepcopy
 
 import time
-import random
+import ompeval
 import torch
 import numpy as np
 import torch.nn.functional as F
-evaluator = Evaluator()
 
-def lookup_hand(all_cards, hand_idx):
-    all_cards_list = list(all_cards)
-    
-    # Calculate the first card index
-    i = 0
-    while comb(51 - i, 1) <= hand_idx:
-        hand_idx -= comb(51 - i, 1)
-        i += 1
-    
-    # Calculate the second card index
-    j = i + 1 + hand_idx
-    
-    return [all_cards_list[i], all_cards_list[j]]
 
-def hand_to_index(i, j):
-    
-    # Ensure i < j
-    if i > j:
-        i, j = j, i
-    
-    # Calculate the hand index
-    hand_idx = sum(comb(51 - k, 1) for k in range(i))
-    hand_idx += j - i - 1
-    
-    return hand_idx
+def construct_card_lookup(int2cards):
+    lookup = []
+    for idx in range(1326):
+        # Calculate the first card index
+        i = 0
+        while comb(51 - i, 1) <= idx:
+            idx -= comb(51 - i, 1)
+            i += 1
+        # Calculate the second card index
+        j = i + 1 + idx
+        lookup.append([int2cards[i], int2cards[j]])
+    return lookup
 
-# expected showdown win percent against opp ranges
-# TODO wprollout needs to be 1000x more efficient
+def construct_hands_lookup(opp_range, card_lookup_table):
+    assert len(opp_range) == 1326
+    lookup = list() 
+    for i in range(len(opp_range)):
+        hand = card_lookup_table[i]
+        lookup.append(hand)
+    return lookup
+
+'''
 def wprollout(
     player_hand, 
     opp_range, 
-    pubset: Pubset, 
+    board, 
     deck_cards # all remaining cards, minus deck too if deck is not empty
     ):
-    player_hand = [Card.new(c) for c in player_hand]
-    all_remaining_board_combo = list(combinations(deck_cards, 5-len(pubset.board)))
-    current_deck = [Card.new(c) for c in pubset.board]
+
+    card_lookup_table = construct_card_lookup(int2cards)
+    hands_lookup_table = construct_hands_lookup(opp_range, card_lookup_table)
+    all_remaining_board_combo = list(combinations(deck_cards, 5-len(board)))
     total_won = 0
-    for board in tqdm(all_remaining_board_combo):
-        board = [Card.new(c) for c in board] + current_deck
-        my_weak = evaluator.evaluate(board, player_hand)
+    for new_board in tqdm(all_remaining_board_combo):
+        new_board = [cards2int[c] for c in new_board] + board
+        my_weak = ompeval.evaluate_hand(new_board +  player_hand)
         won = 0
         for j in range(len(opp_range)):
-            prob, hand = opp_range[j], [Card.new(c) for c in lookup_hand(all_cards, j)]
-            if prob > 0 and not set(hand).intersection(set(board)): 
-                s = time.time()
-                opp_weak = evaluator.evaluate(board, hand)
-                e = time.time()
-                if my_weak < opp_weak:
-                    won += prob
+            prob, opp_hand = opp_range[j], hands_lookup_table[j]
+            if prob > 0 and not set(opp_hand).intersection(set(board)): 
+                opp_weak = ompeval.evaluate_hand(board + player_hand)
+                if my_weak < opp_weak: won += prob
         total_won += won * 1/len(all_remaining_board_combo) 
     return total_won
+'''
+lbr = ompeval.LBR()
 
 def regret_match(logits):
     logits = logits[0]
@@ -95,6 +89,19 @@ def get_board_at_action(pubset: Pubset, actidx):
 # get sequence of action indices in order
 def get_act_indices(bet_fracs, bet_status, player_idx):
     pass
+
+def wprollout(player_hand, opp_range, board, deck_cards):
+    player_hand = [cards2int[c] for c in player_hand]
+    opp_range = opp_range.tolist()
+    board = [cards2int[c] for c in board]
+    deck_cards = [cards2int[c] for c in deck_cards]
+    s = time.time()
+    # ~440 milllion eval/sec, x220000 speedup from python v above
+    wp = lbr.wprollout(player_hand, opp_range, board, deck_cards)
+    e = time.time()
+    print(f'wprollout took {e-s} s')
+    print(wp)
+    return wp
 
 # calc pot based on bet history & starting stacsk
 def calc_pot_stack(
@@ -144,7 +151,7 @@ def get_lbr_act(
     
     if len(pubset.board)>0:
         for hand in pubset.board:
-            hand = list(all_cards).index(hand)
+            hand = cards2int[hand]
             c = 0
             for i in range(52):
                 for j in range(i+1,52):
@@ -154,9 +161,7 @@ def get_lbr_act(
         
         # Count the number of zeros in opp_range
         num_zeros = sum(1 for prob in opp_range if prob == 0)
-        print('num zeros:') 
-        print(num_zeros)
-        input()
+
         # Calculate the new total card value
         new_total = len(opp_range) - num_zeros
         
@@ -169,7 +174,11 @@ def get_lbr_act(
     # TODO why tf is kh, kc still in ?
 
     # get expected showdown win percentage
-    wp = wprollout(player_hand, opp_range, pubset, deck_cards)
+    card_lookup_table = construct_card_lookup(int2cards)
+    hands_lookup_table = construct_hands_lookup(opp_range, card_lookup_table)
+
+    # ~440 milllion eval/sec, x220000 speedup from python v above
+    wp = wprollout(player_hand, opp_range, pubset.board, deck_cards)
 
     player_pot, player_stack = calc_pot_stack(
         starting_stacks, 
@@ -197,7 +206,7 @@ def get_lbr_act(
     action_utils = [0, call_util]
 
     # add all other actions
-    for act in list(pubset.act2name.keys())[2:]:
+    for act in tqdm(list(pubset.act2name.keys())[2:]):
         # skip fold and call cases
         if act <= 1: continue 
         fp = 0
@@ -211,8 +220,7 @@ def get_lbr_act(
         bet_amt = player_stack * cf_pubset.bet_fracs[-1]
 
         for h1 in range(len(opp_range)):
-            print(h1)
-            prob, opp_hand = opp_range[h1], lookup_hand(all_cards, h1)
+            prob, opp_hand = opp_range[h1], hands_lookup_table[h1]
             infoset = prepare_infoset(
                 opp_hand, 
                 cf_pubset.board,
@@ -220,18 +228,20 @@ def get_lbr_act(
                 cf_pubset.bet_fracs,
                 cf_pubset.bet_status 
             )
+
             logits = regret_match(policy(*infoset))
             fp += prob * logits[foldidx]
-
             # update prob of being in all other hand
             for h2 in range(len(opp_range)):
                 if h2 == h1: continue
                 opp_range[h2] *= (1-logits[foldidx])
 
         # normalize
-        opp_range /= opp_range.sum()
+        opp_range /= sum(opp_range)
 
-        wp = wprollout(player_hand, opp_range, pubset, deck_cards)
+        # wprollout value is exact same, this ain't right
+        wp = wprollout(player_hand, opp_range, pubset.board, deck_cards)
+
         action_util = fp * total_pot + (1-fp) * (wp * (total_pot + bet_amt)) \
             - (1-wp) * (asked + bet_amt) 
         action_utils.append(action_util) 
@@ -245,8 +255,8 @@ def get_lbr_act(
 def init_opp_range(my_hand):
     opp_range = np.full(1326, 1/1298)
 
-    hand1 = list(all_cards).index(my_hand[0])
-    hand2 = list(all_cards).index(my_hand[1])
+    hand1 = cards2int[my_hand[0]]
+    hand2 = cards2int[my_hand[1]]
     pos = hand1 * hand2
 
     c = 0
@@ -268,17 +278,7 @@ def init_opp_range(my_hand):
 
 if __name__ == '__main__':
     # calc lbr for p2
-    p1_hand = random.sample(all_cards, 2)
-    deck_cards = all_cards - set(p1_hand)
-    p2_hand = random.sample(deck_cards, 2)
-    deck_cards = deck_cards - set(p2_hand)
-    # this is wrong btw, it should be comb
-    p2_range = np.full(len(all_cards), 1/(len(all_cards)-2))
-    p2_range[list(all_cards).index(p1_hand[0])] = 0
-    p2_range[list(all_cards).index(p1_hand[1])] = 0
+    pass 
 
-    #pubset = Pubset(bet_fracs=[], bet_status=[], deck=[])
-
-    #p1_lbr = lbr(p2_range, pubset, p1_hand, deck_cards=None)
 
 

@@ -7,7 +7,7 @@ from pokerkit.pokerkit import State
 from copy import deepcopy
 from typing import Dict, List, Union, Tuple
 from model import DeepCFRModel
-from util import Pubset, card_to_string, all_cards, prepare_infoset
+from util import Pubset, card_to_string, cards2int, prepare_infoset
 from lbr import get_lbr_act, init_opp_range
 
 import random
@@ -397,8 +397,8 @@ if __name__ == '__main__':
             # TODO force lbr to check first 2 rounds... otheriwse it all-ins 
             # when winning against hand is expected to be 50%> prob
             # evaluate 2 hands, rotated, for 50,000 dealings each
-            p1_hand = random.sample(list(all_cards), 2)
-            remaining_cards = all_cards - set(p1_hand)
+            p1_hand = random.sample(list(cards2int.keys()), 2)
+            remaining_cards = set(cards2int.keys()) - set(p1_hand)
             p2_hand = random.sample(list(remaining_cards), 2)
             deck_cards = remaining_cards - set(p2_hand)
             player_idx = 0 # for 2 players for now 

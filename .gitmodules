@@ -1,3 +1,6 @@
 [submodule "pokerkit"]
 	path = pokerkit
 	url = https://github.com/pythonlearner1025/pokerkit.git
+[submodule "OMPEval"]
+	path = OMPEval
+	url = https://github.com/zekyll/OMPEval.git

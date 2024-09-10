@@ -26,12 +26,35 @@ def card_to_string(card: Card) -> str:
     
     return f"{rank_str}{suit_str}"
 
+# Define dictionaries for RANK and SUIT mappings
+RANK_MAP = {'2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6, '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12}
+SUIT_MAP = {'s': 0, 'h': 1, 'd': 2, 'c': 3}
+
+def card2int(S: str) -> int:
+    """
+    Convert a card string to its integer representation.
+    
+    Args:
+    S (str): A two-character string representing a card (e.g., '2s', 'Th', 'Ac')
+    
+    Returns:
+    int: An integer between 0 and 51 representing the card
+    """
+    rank = RANK_MAP[S[0]]
+    suit = SUIT_MAP[S[1]]
+    return 4 * rank + suit
+
 # enumerate all 52 possible poker cards
+# CardIdx is an integer between 0 and 51, where CARD = 4 * RANK + SUIT
+# rank ranges from 0 (deuce) to 12 (ace) and suit is from 0 (spade) to 3 (club)
 all_cards = {'2c', '2d', '2h', '2s', '3c', '3d', '3h', '3s', '4c', '4d', '4h', '4s',
              '5c', '5d', '5h', '5s', '6c', '6d', '6h', '6s', '7c', '7d', '7h', '7s',
              '8c', '8d', '8h', '8s', '9c', '9d', '9h', '9s', 'Tc', 'Td', 'Th', 'Ts',
              'Jc', 'Jd', 'Jh', 'Js', 'Qc', 'Qd', 'Qh', 'Qs', 'Kc', 'Kd', 'Kh', 'Ks',
              'Ac', 'Ad', 'Ah', 'As'}
+
+cards2int = {card: card2int(card) for card in all_cards}
+int2cards = {card2int(card): card for card in all_cards}
 
 def pad_by(round_bet_history, amt, padding=-1):
     return round_bet_history + [padding] * amt

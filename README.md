@@ -8,3 +8,7 @@ exploitability is defined as difference between
 payoff(strat*, BR(strat*)) - payoff(strat, BR(strat))
 where strat* is the Nash equilibrium strategy
 the lower the better
+
+TODO
+- check if opp range is correctly init in lbr.py
+- make wprollout calc 1000x more efficient
