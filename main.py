@@ -41,10 +41,7 @@ def take_action(game: State, action_index):
         game.complete_bet_or_raise_to(bet_amt)
 
 def verify_action(game: State, action_index):
-    #print('actor', game.actor_index)
-    #print('bets:', game.bets)
-    #print('stacks:', game.stacks)
-    #print("verifying bet")
+
     if action_index == 0:
         try:
             game.verify_folding()
@@ -69,8 +66,6 @@ def verify_action(game: State, action_index):
             return False
     #print("bet is OK")
     return True
-
-
 
 def get_round(n_deck_cards):
     if n_deck_cards == 0:
@@ -131,7 +126,8 @@ def traverse(
             board, 
             max_bets_per_player, 
             round_bet_fracs, 
-            round_bet_status
+            round_bet_status,
+            n_players=n_players
         ) 
 
         logits = net(*I)
@@ -204,7 +200,8 @@ def traverse(
             board, 
             max_bets_per_player, 
             round_bet_fracs, 
-            round_bet_status
+            round_bet_status,
+            n_players=n_players
         ) 
         # TODO regret matching
         logits = net(*I)
@@ -276,7 +273,6 @@ def batch_loader(all_player_advs: List[Tuple], batch_size: int):
             turns.append(turn)
             rivers.append(river)
 
-
         batched_cards = [
             torch.vstack(hands), torch.vstack(flops), 
             torch.vstack(turns), torch.vstack(rivers)
@@ -302,18 +298,37 @@ def batch_loader(all_player_advs: List[Tuple], batch_size: int):
         yield batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t
 
 if __name__ == '__main__':
+    import time, statistics
     H = dict() # all seen infos
+
     # reservoir-sampled adv memories 
+    # n_players = 2
+    # traversals = 100000 
+    # cfr_iters = 1000 
+    # travs_per_sec = 10
+    # total_time = traversals * cfr_iters * n_players / travs_per_sec = 20 * 1e6 s = 231.5 days
+    # if cpp can 50x the speed we have 4.62 days
+    # assume another 10x speedup from parallelism and we have 11 hrs  
+
+    # what about n_players = 6?
+    # traversals_per_sec = 3
+    # traversals = 100000 
+    # cfr_iters = 1000 
+    # total_time = 100000 * 1000 * 6 / 3 = 2*1e8 s = 5.5*1e4 hr = 2291 days
+    # we need 500x speedup for it to complete in 4.62 days,
+    # another 10x speedup for it to complete in 11 hrs
+    # so need around 5000x speedup
+
     bb = 2
-    n_players = 2
+    n_players = 6
     n_rounds = 4
     cfr_iters = 180
-    traversals = 100000
+    traversals = 100
     max_bets_per_player = 6
     batch_size = 10000  # or any other suitable batch size
     max_train_iter = 4000
     max_advs_size = 40*10e6
-    eval_iters = 10000
+    eval_iters = 5
 
     all_advs = {
         p:list()
@@ -337,12 +352,16 @@ if __name__ == '__main__':
     for t in range(1,cfr_iters+1):
         for p in range(n_players):
             p = ((n_players-1)+p) % n_players
+            s0 = time.time()
+            ss = []
             for k in range(traversals):
-                if k > 0: break
-                print(f't: {t}, p: {p}, k: {k}, infosets: {len(all_advs[p])}')
+                s = time.time()
                 traverse_advs = []
                 game = get_new_game(n_players, bb=bb)
-                traverse(game, p, traverse_advs, all_nets, t, max_bets_per_player)
+                try:
+                    traverse(game, p, traverse_advs, all_nets, t, max_bets_per_player)
+                except:
+                    continue
 
                 # reservoir sampling if buffer cap exceeded
                 if len(all_advs[p]) >= max_advs_size:
@@ -357,6 +376,15 @@ if __name__ == '__main__':
                     all_advs[p].extend(traverse_advs)
 
                 total_advs_c += len(traverse_advs)
+                e = time.time()
+                print(f't: {t}, p: {p}, k: {k}, infosets: {len(all_advs[p])}, tm: {e-s} s')
+                ss.append(e-s)
+
+            e0 = time.time()
+            print(f'total time for {traversals} ts is {e0-s0} s')
+            print(f'median time: {statistics.median(ss):.4f} s')
+            print(f'mean time: {statistics.mean(ss):.4f} s')
+            print(f'max time: {max(ss):.4f} s')
 
             # make sure to batch
             net = DeepCFRModel(
@@ -372,8 +400,6 @@ if __name__ == '__main__':
             # Use the batch_loader
             # is dataset player_advs or something else? 
             for i, (batched_cards, batched_bet_fracs, batched_bet_status, batched_advs, batched_t) in enumerate(batch_loader(all_advs[p], batch_size)):
-                if i > max_train_iter:
-                    break
                 print(f'training iter {i}')
                 outputs = net(batched_cards, batched_bet_fracs, batched_bet_status)
                 
@@ -390,6 +416,7 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
             all_nets[p].append(net)
         
             # evaluate
@@ -397,6 +424,7 @@ if __name__ == '__main__':
             # TODO force lbr to check first 2 rounds... otheriwse it all-ins 
             # when winning against hand is expected to be 50%> prob
             # evaluate 2 hands, rotated, for 50,000 dealings each
+            print(f'evaluating against lbr for {eval_iters} iters')
             p1_hand = random.sample(list(cards2int.keys()), 2)
             remaining_cards = set(cards2int.keys()) - set(p1_hand)
             p2_hand = random.sample(list(remaining_cards), 2)
@@ -404,6 +432,7 @@ if __name__ == '__main__':
             player_idx = 0 # for 2 players for now 
 
             for e in range(eval_iters):
+                print(f'eval iter {e}')
                 if e >= eval_iters // 2:
                     player_idx = 1
 
@@ -426,10 +455,12 @@ if __name__ == '__main__':
                     n_rounds=n_rounds,
                     act2name=act2name,
                 )
+
                 # TODO turn into functions lots of redundant code below
-                while game.actor_index is not None or sum(game.status) > 1:
+                while game.actor_index is not None or sum(game.statuses) > 1:
                     round = get_round(game.deck_cards)
                     if game.actor_index == player_idx:
+                        print("player round")
                         actor = game.actor_index
                         hand = game.hole_cards[actor]
                         board = game.board_cards
@@ -438,7 +469,8 @@ if __name__ == '__main__':
                             board, 
                             max_bets_per_player, 
                             round_bet_fracs, 
-                            round_bet_status
+                            round_bet_status,
+                            n_players=n_players
                         ) 
                         # TODO regret matching
                         logits = net(*I)
@@ -477,6 +509,7 @@ if __name__ == '__main__':
 
                         round_bet_fracs.append(bet_frac)
                     else:
+                        print('lbr (opp) round')
                         opp_idx = player_idx
                         player_hand = [p1_hand, p2_hand][game.actor_index]
 

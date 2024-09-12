@@ -35,36 +35,14 @@ def construct_hands_lookup(opp_range, card_lookup_table):
         lookup.append(hand)
     return lookup
 
-'''
-def wprollout(
-    player_hand, 
-    opp_range, 
-    board, 
-    deck_cards # all remaining cards, minus deck too if deck is not empty
-    ):
-
-    card_lookup_table = construct_card_lookup(int2cards)
-    hands_lookup_table = construct_hands_lookup(opp_range, card_lookup_table)
-    all_remaining_board_combo = list(combinations(deck_cards, 5-len(board)))
-    total_won = 0
-    for new_board in tqdm(all_remaining_board_combo):
-        new_board = [cards2int[c] for c in new_board] + board
-        my_weak = ompeval.evaluate_hand(new_board +  player_hand)
-        won = 0
-        for j in range(len(opp_range)):
-            prob, opp_hand = opp_range[j], hands_lookup_table[j]
-            if prob > 0 and not set(opp_hand).intersection(set(board)): 
-                opp_weak = ompeval.evaluate_hand(board + player_hand)
-                if my_weak < opp_weak: won += prob
-        total_won += won * 1/len(all_remaining_board_combo) 
-    return total_won
-'''
 lbr = ompeval.LBR()
 
-def regret_match(logits):
-    logits = logits[0]
+def batch_regret_match(logits):
+    '''
+        logits: B x actions
+    '''
     logits = F.relu(logits)
-    logits_sum = logits.sum().item()  # Convert to scalar
+    logits_sum = logits.sum(dim=0)  # Sum along the row dimension
     if logits_sum > 0:
         return (logits / (torch.full_like(logits, logits_sum) - logits))
     else:
@@ -76,7 +54,7 @@ def regret_match(logits):
 # get board state when this action is chosen
 def get_board_at_action(pubset: Pubset, actidx):
     n_bets_made = actidx*2
-    n_rounds =  n_bets_made // (pubset.n_player * pubset.max_bets)
+    n_rounds =  n_bets_made // (pubset.n_players * pubset.max_bets)
     if n_rounds == 0: 
         return []
     elif n_rounds == 1:
@@ -134,20 +112,32 @@ def get_lbr_act(
     bet_status = pubset.bet_status
     starting_stacks = pubset.stacks
 
+    # get expected showdown win percentage
+    card_lookup_table = construct_card_lookup(int2cards)
+    hands_lookup_table = construct_hands_lookup(opp_range, card_lookup_table)
+
     # update range based on action history
     if bet_fracs:
         for i, actidx in enumerate(list(range(opp_idx, n_players, len(bet_fracs)))):
             for h in range(len(opp_range)):    
-                prob, opp_hand = opp_range[h]
+                prob, opp_hand = opp_range[h], hands_lookup_table[h]
                 infoset = prepare_infoset(
                     opp_hand, 
                     get_board_at_action(pubset, i),
+                    max_bets_per_player,
                     bet_fracs[:i],
                     bet_status[:i]
                 )
-                logits = policy(infoset)
-                probs = regret_match(logits)
-                opp_range[h] = prob * probs[actidx]
+                logits = policy(*infoset)
+                logits_sum = logits.sum().item()
+                if logits_sum > 0: 
+                    regrets = (logits / (torch.full_like(logits, logits_sum) - logits))
+                else:
+                    max_idx = torch.argmax(logits)
+                    regrets = torch.zeros(logits.shape)
+                    regrets[max_idx] = 1
+                regrets = regrets.squeeze()
+                opp_range[h] = prob * regrets[actidx]
     
     if len(pubset.board)>0:
         for hand in pubset.board:
@@ -173,9 +163,7 @@ def get_lbr_act(
     
     # TODO why tf is kh, kc still in ?
 
-    # get expected showdown win percentage
-    card_lookup_table = construct_card_lookup(int2cards)
-    hands_lookup_table = construct_hands_lookup(opp_range, card_lookup_table)
+
 
     # ~440 milllion eval/sec, x220000 speedup from python v above
     wp = wprollout(player_hand, opp_range, pubset.board, deck_cards)
@@ -214,33 +202,61 @@ def get_lbr_act(
         # counterfactual pubset
         bet_frac = float(pubset.act2name[act][5:8])
         bet_amt = bet_frac * pubset.stacks[opp_idx]
-        cf_pubset = deepcopy(pubset)
-        cf_pubset.bet_fracs.append(bet_amt)
-        cf_pubset.bet_status.append(1)
-        bet_amt = player_stack * cf_pubset.bet_fracs[-1]
+        cf_opp_range = np.copy(opp_range)
+        cf_board = deepcopy(pubset.board)
+        cf_bet_fracs = deepcopy(pubset.bet_fracs)
+        cf_bet_status = deepcopy(pubset.bet_status)
+        cf_bet_fracs.append(bet_amt)
+        cf_bet_status.append(1)
+        bet_amt = player_stack * cf_bet_fracs[-1]
 
-        for h1 in range(len(opp_range)):
-            prob, opp_hand = opp_range[h1], hands_lookup_table[h1]
-            infoset = prepare_infoset(
+        # Batch inference
+        batch_size = len(cf_opp_range)
+        batch_cards = []
+        batch_bet_fracs = []
+        batch_bet_status = []
+
+        for h1 in range(batch_size):
+            opp_hand = hands_lookup_table[h1]
+            cards, bet_fracs, bet_status = prepare_infoset(
                 opp_hand, 
-                cf_pubset.board,
+                cf_board,
                 max_bets_per_player,
-                cf_pubset.bet_fracs,
-                cf_pubset.bet_status 
+                cf_bet_fracs,
+                cf_bet_status 
             )
+            batch_cards.append(cards)
+            batch_bet_fracs.append(bet_fracs)
+            batch_bet_status.append(bet_status)
+        # Combine batches
+        batch_cards = [torch.cat([batch[i] for batch in batch_cards]) for i in range(4)]
+        batch_bet_fracs = torch.cat(batch_bet_fracs)
+        batch_bet_status = torch.cat(batch_bet_status)
 
-            logits = regret_match(policy(*infoset))
-            fp += prob * logits[foldidx]
+        # Single policy call
+        batch_logits = policy(batch_cards, batch_bet_fracs, batch_bet_status)
+
+        for h1 in range(batch_size):
+            prob = cf_opp_range[h1]
+            regrets = batch_logits[h1]
+            regrets_sum = regrets.sum().item()
+            if regrets_sum > 0:
+                regrets = (regrets / (torch.full_like(regrets, regrets_sum) - regrets))
+            else:
+                max_index = torch.argmax(regrets)
+                one_hot = torch.zeros_like(regrets)
+                one_hot[max_index] = 1
+            fp += prob * regrets[foldidx]
             # update prob of being in all other hand
-            for h2 in range(len(opp_range)):
-                if h2 == h1: continue
-                opp_range[h2] *= (1-logits[foldidx])
+            for h2 in range(batch_size):
+                if h2 != h1: 
+                    cf_opp_range[h2] *= (1-regrets[foldidx])
+                else:
+                    cf_opp_range[h1] *= regrets[foldidx]
 
-        # normalize
-        opp_range /= sum(opp_range)
+        cf_opp_range /= cf_opp_range.sum()
 
-        # wprollout value is exact same, this ain't right
-        wp = wprollout(player_hand, opp_range, pubset.board, deck_cards)
+        wp = wprollout(player_hand, cf_opp_range, pubset.board, deck_cards)
 
         action_util = fp * total_pot + (1-fp) * (wp * (total_pot + bet_amt)) \
             - (1-wp) * (asked + bet_amt) 
