@@ -319,6 +319,9 @@ if __name__ == '__main__':
     # another 10x speedup for it to complete in 11 hrs
     # so need around 5000x speedup
 
+    # 100x switching to c++
+    # 10-50x parallelism 
+
     bb = 2
     n_players = 6
     n_rounds = 4
