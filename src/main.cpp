@@ -11,7 +11,7 @@
 // Helper Function to Convert Card String to Index
 int card_str_to_index(const std::string& card_str) {
     if (card_str.length() != 2) {
-        throw std::invalid_argument("Invalid card string length.");
+        throw std::invalid_argument("Invalid card string length: " + card_str);
     }
 
     // Map Rank
@@ -36,7 +36,7 @@ int card_str_to_index(const std::string& card_str) {
         rank_index = 12;
     }
     else {
-        throw std::invalid_argument("Invalid rank character.");
+        throw std::invalid_argument("Invalid rank character in card: " + card_str);
     }
 
     // Map Suit
@@ -55,7 +55,7 @@ int card_str_to_index(const std::string& card_str) {
         suit_index = 3;
     }
     else {
-        throw std::invalid_argument("Invalid suit character.");
+        throw std::invalid_argument("Invalid suit character in card: " + card_str);
     }
 
     return 4 * rank_index + suit_index;
@@ -81,6 +81,70 @@ omp::Hand create_hand(const std::vector<std::string>& cards) {
     return hand;
 }
 
+// Function to Process Player Actions
+void process_player_action(PokerEngine& engine, const std::string& player_str, const std::string& action, const std::vector<std::string>& params = {}) {
+    int player_index = -1;
+
+    // Map player string to index
+    if (player_str == "p1") player_index = 0;
+    else if (player_str == "p2") player_index = 1;
+    else if (player_str == "p3") player_index = 2;
+    else if (player_str == "p4") player_index = 3;
+    else if (player_str == "p5") player_index = 4;
+    else {
+        throw std::invalid_argument("Unknown player identifier: " + player_str);
+    }
+
+    if (action == "f") {
+        // Fold
+        engine.fold(player_index);
+        std::cout << "Player " << player_str << " folded." << std::endl;
+    }
+    else if (action == "cbr") {
+        // Check, Bet, or Raise with amount
+        if (params.size() < 1) {
+            throw std::invalid_argument("Missing amount for 'cbr' action.");
+        }
+        double amount = std::stod(params[0]);
+        engine.bet_or_raise(player_index, amount);
+        std::cout << "Player " << player_str << " bet/raised " << amount << "." << std::endl;
+    }
+    else if (action == "cc") {
+        // Check or Call
+        engine.check_or_call(player_index);
+        std::cout << "Player " << player_str << " checked/called." << std::endl;
+    }
+    else if (action == "sm") {
+        // Showdown
+        engine.showdown();
+        std::cout << "Showdown triggered by " << player_str << "." << std::endl;
+    }
+    else {
+        throw std::invalid_argument("Unknown player action: " + action);
+    }
+}
+
+// Function to Process Deal Actions
+void process_deal_action(PokerEngine& engine, const std::string& deal_type, const std::string& deal_data) {
+    if (deal_type == "dh") {
+        // Deal Hand - already handled manually
+        std::cout << "Deal Hand action ignored in manual mode." << std::endl;
+    }
+    else if (deal_type == "db") {
+        // Deal Board
+        // e.g., "JcTs2d" => ['Jc','Ts','2d']
+        std::vector<int> board_cards;
+        for (size_t i = 0; i + 1 < deal_data.length(); i += 2) {
+            board_cards.push_back(card_str_to_index(deal_data.substr(i, 2)));
+        }
+        engine.manual_deal_board(board_cards);
+        std::cout << "Board dealt manually with cards: " << deal_data << std::endl;
+    }
+    else {
+        throw std::invalid_argument("Unknown deal type: " + deal_type);
+    }
+}
+
 void test_poker() {
     try {
         // Step 1: Initialize the Poker Engine in Manual Mode
@@ -90,9 +154,10 @@ void test_poker() {
         double big_blind = 80000;
         int max_round_bets = 4;
         bool manual = true;
+        int actor = 2; 
 
         // Initialize the PokerEngine with manual mode enabled
-        PokerEngine engine(starting_stacks, n_players, small_blind, big_blind, max_round_bets, manual);
+        PokerEngine engine(starting_stacks, actor, n_players, small_blind, big_blind, max_round_bets, manual);
 
         std::cout << "Poker Engine initialized in manual mode." << std::endl;
 
@@ -132,131 +197,76 @@ void test_poker() {
             "p2 sm Js8h"
         };
 
-        for (const auto& action : actions) {
-            std::cout << "Processing action: " << action << std::endl;
+        for (const auto& action_str : actions) {
+            std::cout << "\nProcessing action: " << action_str << std::endl;
             // Split the action string by spaces
             std::vector<std::string> tokens;
             size_t pos = 0, found;
-            while((found = action.find_first_of(' ', pos)) != std::string::npos){
-                tokens.push_back(action.substr(pos, found - pos));
-                pos = found+1;
+            while ((found = action_str.find_first_of(' ', pos)) != std::string::npos) {
+                tokens.push_back(action_str.substr(pos, found - pos));
+                pos = found + 1;
             }
-            tokens.push_back(action.substr(pos));
+
+            tokens.push_back(action_str.substr(pos));
 
             if (tokens.empty()) {
                 continue;
             }
 
-            std::string action_type = tokens[0];
+            std::string first_token = tokens[0];
 
-            if (action_type == "p3" || action_type == "p4" || action_type == "p5" || action_type == "p1" || action_type == "p2") {
-                // Player action
-                // tokens[0]: player identifier (e.g., "p3")
-                // tokens[1]: action (e.g., "f", "cbr", "cc", "sm")
-                std::string player_str = tokens[0];
-                std::string player_action = tokens[1];
-                int player_index = -1;
-
-                // Map player string to index
-                if (player_str == "p1") player_index = 0;
-                else if (player_str == "p2") player_index = 1;
-                else if (player_str == "p3") player_index = 2;
-                else if (player_str == "p4") player_index = 3;
-                else if (player_str == "p5") player_index = 4;
-                else {
-                    std::cerr << "Unknown player identifier: " << player_str << std::endl;
-                    continue;
-                }
-
-                if (player_action == "f") {
-                    // Fold
-                    engine.fold(player_index);
-                    std::cout << "Player " << player_str << " folded." << std::endl;
-                }
-                else if (player_action == "cbr") {
-                    // Check or Bet Raise with amount
-                    if (tokens.size() < 3) {
-                        std::cerr << "Invalid cbr action format." << std::endl;
-                        continue;
-                    }
-                    double amount = std::stod(tokens[2]);
-                    engine.bet_or_raise(player_index, amount);
-                    std::cout << "Player " << player_str << " bet or raised " << amount << "." << std::endl;
-                }
-                else if (player_action == "cc") {
-                    // Check or Call
-                    engine.check_or_call(player_index);
-                    std::cout << "Player " << player_str << " checked or called." << std::endl;
-                }
-                else if (player_action == "sm") {
-                    // Showdown or Special Action
-                    // Assuming 'sm' stands for showdown
-                    // Optionally, handle specific showdown actions
-                    // For simplicity, we call showdown
-                    std::cout << "Player " << player_str << " triggered showdown." << std::endl;
-                    engine.showdown();
-                }
-                else {
-                    std::cerr << "Unknown player action: " << player_action << std::endl;
-                }
-            }
-            else if (action_type == "d") {
+            if (first_token == "d") {
                 // Deal action
-                // tokens[0]: "d"
-                // tokens[1]: "db" or "dh"
-                // tokens[2]: target (e.g., "JcTs2d" or player identifier)
                 if (tokens.size() < 3) {
-                    std::cerr << "Invalid deal action format." << std::endl;
-                    continue;
+                    throw std::invalid_argument("Invalid deal action format: " + action_str);
                 }
                 std::string deal_type = tokens[1];
                 std::string deal_data = tokens[2];
-
-                if (deal_type == "dh") {
-                    // Deal Hand (already handled manually)
-                    // Skip or handle if necessary
-                    std::cout << "Deal Hand action ignored in manual mode." << std::endl;
-                    continue;
-                }
-                else if (deal_type == "db") {
-                    // Deal Board
-                    // e.g., "JcTs2d" => ['Jc','Ts','2d']
-                    std::vector<int> board_cards;
-                    for (size_t i = 0; i+1 < deal_data.length(); i +=2 ) {
-                        board_cards.push_back(card_str_to_index(deal_data.substr(i,2)));
-                    }
-                    engine.manual_deal_board(board_cards);
-                    std::cout << "Board dealt manually with cards: " << deal_data << std::endl;
-                }
-                else {
-                    std::cerr << "Unknown deal type: " << deal_type << std::endl;
-                }
+                process_deal_action(engine, deal_type, deal_data);
             }
             else {
-                std::cerr << "Unknown action type: " << action_type << std::endl;
+                // Player action
+                if (tokens.size() < 2) {
+                    throw std::invalid_argument("Invalid player action format: " + action_str);
+                }
+                std::string player_str = tokens[0];
+                std::string action = tokens[1];
+                std::vector<std::string> params;
+                for (size_t i = 2; i < tokens.size(); ++i) {
+                    params.push_back(tokens[i]);
+                }
+                process_player_action(engine, player_str, action, params);
             }
         }
 
         // Step 4: Verify Final Stack Sizes
         std::vector<double> expected_finishing_stacks = {7340000, 3775000, 5110000, 8935000, 4545000};
-        // Retrieve actual finishing stacks
-        std::array<double, PokerEngine::MAX_PLAYERS> actual_finishing_stacks = engine.get_payoffs();
+        std::array<double, PokerEngine::MAX_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
 
         std::cout << "\nFinal Stack Verification:" << std::endl;
-        for(int i=0;i<n_players;i++){
+        bool all_correct = true;
+        for(int i = 0; i < n_players; i++) {
             double expected = expected_finishing_stacks[i];
-            double actual = engine.players[i].stack;
+            double actual = actual_finishing_stacks[i];
             if(std::abs(expected - actual) < 1e-2){
                 std::cout << "Player " << (i+1) << " stack correct: " << actual << std::endl;
             }
             else{
                 std::cout << "Player " << (i+1) << " stack incorrect: expected " << expected << ", got " << actual << std::endl;
+                all_correct = false;
             }
         }
 
-        std::cout << "Test completed successfully." << std::endl;
+        if(all_correct){
+            std::cout << "\nTest completed successfully. All player stacks are correct." << std::endl;
+        }
+        else{
+            std::cout << "\nTest failed. Some player stacks are incorrect." << std::endl;
+        }
     } catch (const std::exception& e) {
         std::cerr << "An exception occurred: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "An unknown exception occurred." << std::endl;
     }
 }
 

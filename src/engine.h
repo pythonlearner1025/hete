@@ -18,6 +18,7 @@ public:
     // constructor
     PokerEngine(
         std::vector<double> starting_stacks,
+        int actor,
         int n_players, 
         double small_blind, 
         double big_blind,
@@ -25,9 +26,6 @@ public:
         bool manual
         );
     ~PokerEngine() = default;
-
-    // setters
-    void set_stack(std::vector<double> stack);
 
     // queries
     bool is_in(int player) const;
@@ -65,6 +63,8 @@ public:
         PlayerStatus status;
         std::array<std::vector<double>, 4> bets_per_round; // 4 betting rounds
     };
+
+    std::array<double, MAX_PLAYERS> get_finishing_stacks() const;
 
     std::array<Player, MAX_PLAYERS> players;
 

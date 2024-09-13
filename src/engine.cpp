@@ -4,14 +4,14 @@
 #include <algorithm>
 #include <random>
 
-PokerEngine::PokerEngine(std::vector<double> starting_stacks, int n_players, double small_blind, double big_blind, int max_round_bets, bool manual)
+PokerEngine::PokerEngine(std::vector<double> starting_stacks, int actor, int n_players, double small_blind, double big_blind, int max_round_bets, bool manual)
     : 
       n_players(n_players),
       small_blind(small_blind),
       big_blind(big_blind),
       max_round_bets(max_round_bets),
       round(0),
-      actor(0),
+      actor(actor),
       pot(0.0),
       game_status(true),
       manual(manual)
@@ -80,7 +80,7 @@ PokerEngine::PokerEngine(std::vector<double> starting_stacks, int n_players, dou
 
 void PokerEngine::fold(int player) {
     if (player != this->actor) {
-        throw std::runtime_error("Player mismatch: folding player is not the current actor");
+        throw std::runtime_error("Player mismatch: folding player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));
     }
     this->players[player].status = PlayerStatus::Folded;
     // No need to adjust pot or bets here since the player forfeits their current bet
@@ -91,7 +91,7 @@ void PokerEngine::fold(int player) {
 // their total stack < min_bet_amt 
 void PokerEngine::bet_or_raise(int player, double amount) {
     if (player != this->actor) {
-        throw std::runtime_error("Player mismatch: betting player is not the current actor");
+        throw std::runtime_error("Player mismatch: betting player " + std::to_string(player + 1) + " is not the current actor " + std::to_string(this->actor+1));
     }
 
     double min_bet_amt = calc_min_bet_amt(player);
@@ -131,7 +131,7 @@ void PokerEngine::bet_or_raise(int player, double amount) {
 
 void PokerEngine::check_or_call(int player) {
     if (player != this->actor) {
-        throw std::runtime_error("Player mismatch: checking/calling player is not the current actor");
+        throw std::runtime_error("Player mismatch: checking/calling player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));
     }
     double min_bet_amt = calc_min_bet_amt(player);
     double call_amt = min_bet_amt - this->players[player].total_bet;
@@ -260,21 +260,22 @@ double PokerEngine::get_current_max_bet() const {
 }
 
 bool PokerEngine::is_round_complete() const {
+    // if every live player has had a chance to act
+    // p2 cc -> 
     double highest_bet = get_current_max_bet();
 
     for (int i = 0; i < n_players; ++i) {
         if (players[i].status == PlayerStatus::Playing) {
-            if (players[i].total_bet < highest_bet) {
-                // This player still needs to act
+            // leq because if eq, player can do check action.
+            // if less, player must cbr
+            if (players[i].total_bet < highest_bet || 
+                players[i].bets_per_round[this->round].size() == 0) {
                 return false;
             }
         }
     }
-
-    // All players have either matched the highest bet, are folded, or are all-in
     return true;
 }
-
 
 void PokerEngine::next_state() {
     if (is_everyone_all_in()) {
@@ -283,29 +284,51 @@ void PokerEngine::next_state() {
     }
 
     if (is_round_complete()) {
-        if (this->round == 3) {
+        std::cout << "Round " << this->round << " is complete." << std::endl;
+        if (this->round == 3 && !this->manual) {
             showdown();
             return;
         } else {
             // Proceed to next betting round
-            this->round++;
             deal_cards();
         }
+        this->actor = 1;
+        if (this->players[1].status == PlayerStatus::Playing) return;
     }
 
     // Find the next player to act
     int curr_actor = this->actor;
     bool found_next_actor = false;
+    std::cout << "Current actor: Player " << curr_actor+1 << std::endl;
+
     for (int i = 1; i <= n_players; ++i) {
         int next_player = (curr_actor + i) % n_players;
         if (players[next_player].status == PlayerStatus::Playing) {
             this->actor = next_player;
             found_next_actor = true;
+            std::cout << "New actor: Player " << next_player+1 << std::endl;
             break;
+        } else {
+            std::cout << "Skipped Player " << next_player+1 << " (Status: ";
+            switch (players[next_player].status) {
+                case PlayerStatus::Folded:
+                    std::cout << "Folded";
+                    break;
+                case PlayerStatus::AllIn:
+                    std::cout << "All-In";
+                    break;
+                case PlayerStatus::Out:
+                    std::cout << "Out";
+                    break;
+                default:
+                    std::cout << "Unknown";
+            }
+            std::cout << ")" << std::endl;
         }
     }
 
     if (!found_next_actor) {
+        std::cout << "No active players found. Proceeding to showdown." << std::endl;
         // All players are folded or all-in
         showdown();
     }
@@ -315,6 +338,10 @@ void PokerEngine::next_state() {
 // case 1: round 4 ended
 // case 2: all live players all-ined
 void PokerEngine::showdown() {
+    if (!this->game_status) {
+        std::cout << "showdown already triggered, skipping" << std::endl;
+        return;
+    }
     // get all live players + side pot, 
     // evaluate each of their hands against board,
     // get the winner(s), then distribute to payoffs
@@ -330,6 +357,7 @@ void PokerEngine::showdown() {
             this->deck.erase(this->deck.begin() + idx);
         }
     }
+    std::cout << "Debug: Board size after dealing: " << this->board.size() << std::endl;
 
     // populate player hand strengths
     std::vector<std::tuple<int, int>> hand_strengths;
@@ -346,12 +374,14 @@ void PokerEngine::showdown() {
             hand_strengths.push_back({i, hand_strength});
         }
     }
+    std::cout << "Debug: Number of players with evaluated hands: " << hand_strengths.size() << std::endl;
 
     // sort the vector, descending order
     std::sort(hand_strengths.begin(), hand_strengths.end(),
         [](const auto& a, const auto& b) {
             return std::get<1>(a) > std::get<1>(b);
     });
+    std::cout << "Debug: Hand strengths sorted" << std::endl;
 
     if (hand_strengths.size() < 2) {
         throw std::runtime_error("must be at least 2 live players or side pot players at showdown");
@@ -379,6 +409,7 @@ void PokerEngine::showdown() {
         }
     } else {
         // main pot wins, ignore side pot
+        pot_winners.push_back(winner);
         int next = winner + 1;
         while (next < hand_strengths.size() && 
             std::get<1>(hand_strengths[++next]) == std::get<1>(hand_strengths[0])) {
@@ -386,6 +417,8 @@ void PokerEngine::showdown() {
             pot_winners.push_back(player); 
         } 
     }
+
+    std::cout << "Debug: Number of pot winners: " << pot_winners.size() << ", Number of side pot winners: " << side_pot_winners.size() << std::endl;
 
     // side pot payoff calc: https://en.wikipedia.org/wiki/Betting_in_poker
     // scenario A sb 5, B bb 10, C bet 15, A fold, B all in 10, C check 
@@ -406,6 +439,7 @@ void PokerEngine::showdown() {
         this->pot -= payoff;
         this->players[player].stack += payoff;
     }
+    std::cout << "Debug: Side pot payoffs calculated. Remaining pot: " << this->pot << std::endl;
         
     // split remaining pot evenly between pot_winners
     double split_pot = this->pot / static_cast<double>(pot_winners.size());
@@ -414,14 +448,20 @@ void PokerEngine::showdown() {
         this->payoffs[player] = split_pot;
         this->players[player].stack += split_pot;
     }
+    std::cout << "Debug: Main pot split. Each winner receives: " << split_pot << std::endl;
 
     this->game_status = false;
+    std::cout << "Debug: Game status set to false" << std::endl;
 }
 
 
 /* PUBLIC VERIFICATIONS  */
 
 bool PokerEngine::should_force_check_or_call() const {
+    std::cout << "Debug: Checking if should force check or call for Player " << (actor + 1) << std::endl;
+    std::cout << "Debug: Current round: " << this->round << ", Max round bets: " << this->max_round_bets << std::endl;
+    std::cout << "Debug: Player's bets this round: " << this->players[actor].bets_per_round[this->round].size() << std::endl;
+
     int actor = this->actor;
     if (this->players[actor].bets_per_round[this->round].size() == this->max_round_bets - 1) {
         return true;
@@ -500,14 +540,6 @@ void PokerEngine::manual_deal_board(const std::vector<int>& board_cards) {
     // Assign the new board cards
     for (int card : board_cards) {
         this->board.push_back(card);
-
-        // Remove the dealt card from the deck
-        auto it = std::find(this->deck.begin(), this->deck.end(), static_cast<uint8_t>(card));
-        if (it != this->deck.end()) {
-            this->deck.erase(it);
-        } else {
-            throw std::runtime_error("Dealt board card is not in the deck.");
-        }
     }
 
     // Optionally, update the round if the board is fully dealt
@@ -522,8 +554,13 @@ void PokerEngine::manual_deal_board(const std::vector<int>& board_cards) {
     }
 }
 
-void PokerEngine::set_stack(std::vector<double> stack) {
-    return;    
+/* queries */
+std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_finishing_stacks() const {
+    std::array<double, MAX_PLAYERS> stacks;
+    for(int i = 0; i < n_players; ++i){
+        stacks[i] = players[i].stack;
+    }
+    return stacks;
 }
 
 const std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_payoffs() const {
