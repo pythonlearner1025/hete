@@ -18,13 +18,15 @@ public:
     // constructor
     PokerEngine(
         std::vector<double> starting_stacks,
+        std::vector<double> antes,
         int actor,
         int n_players, 
         double small_blind, 
         double big_blind,
-        int max_round_bets,
+        uint max_round_bets,
         bool manual
         );
+
     ~PokerEngine() = default;
 
     // queries
