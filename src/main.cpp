@@ -412,7 +412,6 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
             n_players, 
             small_bet, 
             big_bet, 
-            4, 
             true
         ); // Assuming max_round_bets = 4 and manual_mode = true
 
@@ -475,6 +474,20 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
             }
         }
 
+        // Print out construct_history values
+        auto [bet_status, bet_fracs] = engine.construct_history();
+        std::cout << "Construct History Results:" << std::endl;
+        std::cout << "Bet Status: ";
+        for (bool status : bet_status) {
+            std::cout << status << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "Bet Fractions: ";
+        for (double frac : bet_fracs) {
+            std::cout << frac << " ";
+        }
+        std::cout << std::endl;
+
         return true;
     } catch (const std::exception& e) {
         std::cerr << "Exception in test_poker for file " << file_name << ": " << e.what() << std::endl;
@@ -505,8 +518,6 @@ int main() {
                 std::cout << "Skipping file (contains 'blinds_or_straddles'): " << file_name << std::endl;
                 continue;
             }
-
-
 
             // Run the test_poker function
             bool test_passed = test_poker(phh, file_name);

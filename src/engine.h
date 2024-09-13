@@ -14,6 +14,7 @@ public:
     // constants
     static const int MAX_PLAYERS = 6;
     static const int BOARD_SIZE = 5;
+    static const int MAX_ROUND_BETS = 4;
 
     // constructor
     PokerEngine(
@@ -23,7 +24,6 @@ public:
         int n_players, 
         double small_blind, 
         double big_blind,
-        uint max_round_bets,
         bool manual
         );
 
@@ -55,7 +55,7 @@ public:
     void showdown();
 
     // Construct bet history
-    void construct_history(std::vector<int>& bet_status, std::vector<double>& bet_fracs) const;
+    std::pair<std::array<bool, MAX_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, MAX_PLAYERS * 4 * MAX_ROUND_BETS>> construct_history() const;
 
     enum class PlayerStatus { Playing, Folded, AllIn, Out };
     struct Player {
@@ -75,7 +75,6 @@ private:
     int n_players;
     double small_blind;
     double big_blind;
-    int max_round_bets;
     int round;
     int actor;
     int bet_idx;

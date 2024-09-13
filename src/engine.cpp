@@ -11,14 +11,12 @@ PokerEngine::PokerEngine(
     int n_players, 
     double small_blind, 
     double big_blind, 
-    uint max_round_bets, 
     bool manual
     )
     : 
       n_players(n_players),
       small_blind(small_blind),
       big_blind(big_blind),
-      max_round_bets(max_round_bets),
       round(0),
       actor(actor),
       pot(0.0),
@@ -47,7 +45,7 @@ PokerEngine::PokerEngine(
         this->players[i].status = PlayerStatus::Playing;
         // Initialize bets_per_round for each player
         for (int r = 0; r < 4; ++r) {
-            this->players[i].bets_per_round[r].reserve(max_round_bets);
+            this->players[i].bets_per_round[r].reserve(MAX_ROUND_BETS);
         }
     }
 
@@ -492,11 +490,11 @@ void PokerEngine::showdown() {
 
 bool PokerEngine::should_force_check_or_call() const {
     std::cout << "Debug: Checking if should force check or call for Player " << (actor + 1) << std::endl;
-    std::cout << "Debug: Current round: " << this->round << ", Max round bets: " << this->max_round_bets << std::endl;
+    std::cout << "Debug: Current round: " << this->round << ", Max round bets: " << MAX_ROUND_BETS << std::endl;
     std::cout << "Debug: Player's bets this round: " << this->players[actor].bets_per_round[this->round].size() << std::endl;
 
     int actor = this->actor;
-    if (this->players[actor].bets_per_round[this->round].size() == this->max_round_bets - 1) {
+    if (this->players[actor].bets_per_round[this->round].size() == MAX_ROUND_BETS - 1) {
         return true;
     }     
     return false;
@@ -504,48 +502,38 @@ bool PokerEngine::should_force_check_or_call() const {
 
 /* PUBLIC QUERIES */ 
 
-void PokerEngine::construct_history(std::vector<int>& bet_status, std::vector<double>& bet_fracs) const {
-    // Calculate the total number of bets possible
-    int total_bets = 4 * MAX_PLAYERS * max_round_bets;
-    bet_status.assign(total_bets, 0);
-    bet_fracs.assign(total_bets, 0.0);
+std::pair<std::array<bool, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>, std::array<double, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>> PokerEngine::construct_history() const {
+    constexpr int total_bets = 4 * MAX_PLAYERS * MAX_ROUND_BETS;
+
+    std::array<bool, total_bets> bet_status{};
+    std::array<double, total_bets> bet_fracs{};
+    std::fill(bet_status.begin(), bet_status.end(), false);
+    std::fill(bet_fracs.begin(), bet_fracs.end(), 0.0);
 
     int index = 0;
-    double initial_pot = small_blind + big_blind; // Starting pot size
+    double pot = this->small_blind + this->big_blind;
 
-    for (int r = 0; r <= round; ++r) {
-        double pot_at_round_start = initial_pot;
-        for (int p = 0; p < n_players; ++p) {
-            double cumulative_bet = 0.0;
-            for (double bet_amount : players[p].bets_per_round[r]) {
-                // Determine bet status
-                bet_status[index] = (bet_amount > 0.0) ? 1 : 0;
+    for (int r = 0; r < 4; ++r) {
+        for (uint b = 0; b < MAX_ROUND_BETS * this->n_players; ++b) {
+            uint p = b % this->n_players; 
+            uint n_bet = static_cast<uint>(std::floor(static_cast<double>(b) / this->n_players));
 
-                // Calculate fractional bet
-                bet_fracs[index] = bet_amount / pot_at_round_start;
-
-                // Update cumulative bet and pot size
-                cumulative_bet += bet_amount;
-                pot_at_round_start += bet_amount;
-
-                index++;
+            if (this->players[p].bets_per_round[0].size() == 0) {
+                continue;
             }
 
-            // Pad with zeros if the player didn't reach max_round_bets
-            int bets_made = players[p].bets_per_round[r].size();
-            for (int b = bets_made; b < max_round_bets; ++b) {
-                bet_status[index] = 0;
-                bet_fracs[index] = 0.0;
-                index++;
+            if (n_bet < this->players[p].bets_per_round[r].size()) {
+                double bet_amount = this->players[p].bets_per_round[r][n_bet]; 
+
+                bet_status[b] = (bet_amount > 0.0) ? 1 : 0;
+                bet_fracs[b] = bet_amount / pot;
+
+                pot += bet_amount;
             }
         }
     }
 
-    // Pad the remaining history if less than total_bets
-    for (; index < total_bets; ++index) {
-        bet_status[index] = 0;
-        bet_fracs[index] = 0.0;
-    }
+    return std::make_pair(bet_status, bet_fracs);
 }
 
 /* MANUAL MODE */
