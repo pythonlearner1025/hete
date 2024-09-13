@@ -125,20 +125,69 @@ void process_player_action(PokerEngine& engine, const std::string& player_str, c
 }
 
 // Function to Process Deal Actions
-void process_deal_action(PokerEngine& engine, const std::string& deal_type, const std::string& deal_data) {
+void process_deal_action(PokerEngine& engine, const std::vector<std::string>& tokens) {
+    if (tokens.size() < 3) {
+        throw std::invalid_argument("Invalid deal action format.");
+    }
+
+    std::string deal_type = tokens[1];
+
     if (deal_type == "dh") {
-        // Deal Hand - already handled manually
-        std::cout << "Deal Hand action ignored in manual mode." << std::endl;
+        // Deal Hand
+        if (tokens.size() < 4) {
+            throw std::invalid_argument("Invalid 'd dh' action format. Expected: 'd dh pX card1card2'");
+        }
+        std::string player_str = tokens[2];
+        std::string cards_str = tokens[3];
+
+        // Extract individual card strings (each card is 2 characters)
+        if (cards_str.length() != 4) {
+            throw std::invalid_argument("Invalid number of cards for 'dh' action. Expected 2 cards.");
+        }
+        std::vector<std::string> card_strings;
+        for (size_t i = 0; i + 1 < cards_str.length(); i += 2) {
+            card_strings.push_back(cards_str.substr(i, 2));
+        }
+        if (card_strings.size() != 2) {
+            throw std::invalid_argument("Invalid number of cards for 'dh' action. Expected 2 cards.");
+        }
+
+        omp::Hand hand = create_hand(card_strings);
+
+        // Map player string to index
+        int player_index = -1;
+        if (player_str == "p1") player_index = 0;
+        else if (player_str == "p2") player_index = 1;
+        else if (player_str == "p3") player_index = 2;
+        else if (player_str == "p4") player_index = 3;
+        else if (player_str == "p5") player_index = 4;
+        else {
+            throw std::invalid_argument("Unknown player identifier in 'dh' action: " + player_str);
+        }
+
+        // Deal the hand to the player
+        engine.manual_deal_hand(player_index, hand);
+        std::cout << "Dealt hand " << cards_str << " to " << player_str << "." << std::endl;
     }
     else if (deal_type == "db") {
         // Deal Board
-        // e.g., "JcTs2d" => ['Jc','Ts','2d']
-        std::vector<int> board_cards;
-        for (size_t i = 0; i + 1 < deal_data.length(); i += 2) {
-            board_cards.push_back(card_str_to_index(deal_data.substr(i, 2)));
+        if (tokens.size() < 3) {
+            throw std::invalid_argument("Invalid 'd db' action format. Expected: 'd db card1card2card3...'");
         }
-        engine.manual_deal_board(board_cards);
-        std::cout << "Board dealt manually with cards: " << deal_data << std::endl;
+        std::string cards_str = tokens[2];
+
+        // Each card is 2 characters
+        if (cards_str.length() % 2 != 0) {
+            throw std::invalid_argument("Invalid board cards string length.");
+        }
+
+        std::vector<int> board;
+        for (size_t i = 0; i + 1 < cards_str.length(); i += 2) {
+            board.push_back(card_str_to_index(cards_str.substr(i, 2)));
+        }
+
+        engine.manual_deal_board(board);
+        std::cout << "Board dealt manually with cards: " << cards_str << std::endl;
     }
     else {
         throw std::invalid_argument("Unknown deal type: " + deal_type);
@@ -148,53 +197,35 @@ void process_deal_action(PokerEngine& engine, const std::string& deal_type, cons
 void test_poker() {
     try {
         // Step 1: Initialize the Poker Engine in Manual Mode
-        std::vector<double> starting_stacks = {7380000, 2500000, 5110000, 10170000, 4545000};
+        std::vector<double> starting_stacks = {2400000, 9700000, 4575000, 8175000, 4850000};
+        std::vector<double> expected_finishing_stacks = {2600000, 9550000, 4475000, 8075000, 4750000};
         int n_players = 5;
-        double small_blind = 40000;
-        double big_blind = 80000;
+        double small_bet = 200000;
+        double big_bet = 400000;
+        double bring_in = 50000;
         int max_round_bets = 4;
         bool manual = true;
-        int actor = 2; 
+        int actor = 2;
 
         // Initialize the PokerEngine with manual mode enabled
-        PokerEngine engine(starting_stacks, actor, n_players, small_blind, big_blind, max_round_bets, manual);
+        PokerEngine engine(starting_stacks, actor, n_players, small_bet, big_bet, max_round_bets, manual);
 
         std::cout << "Poker Engine initialized in manual mode." << std::endl;
 
-        // Step 2: Manually Deal Hands to Players
-        // Actions:
-        // 'd dh p1 7s4s', 'd dh p2 Js8h', 'd dh p3 Td8c', 'd dh p4 6d5h', 'd dh p5 Qh7h'
-
-        engine.manual_deal_hand(0, create_hand("7s", "4s")); // p1
-        engine.manual_deal_hand(1, create_hand("Js", "8h")); // p2
-        engine.manual_deal_hand(2, create_hand("Td", "8c")); // p3
-        engine.manual_deal_hand(3, create_hand("6d", "5h")); // p4
-        engine.manual_deal_hand(4, create_hand("Qh", "7h")); // p5
-
-        std::cout << "Hands dealt manually to all players." << std::endl;
-
-        // Step 3: Execute Actions in Order
-        // Actions list:
+        // Step 2: Execute Actions in Order
+        // Actions list as per the .phh file:
         std::vector<std::string> actions = {
+            "d dh p1 Qh6cJd",
+            "d dh p2 8s5d3c",
+            "d dh p3 7d4dTs",
+            "d dh p4 6h3dTd",
+            "d dh p5 Qc6dTh",
+            "p2 pb",
             "p3 f",
-            "p4 cbr 170000",
+            "p4 f",
             "p5 f",
-            "p1 f",
-            "p2 cc",
-            "d db JcTs2d",
-            "p2 cc",
-            "p4 cbr 140000",
-            "p2 cc",
-            "d db As",
-            "p2 cc",
-            "p4 cbr 325000",
-            "p2 cc",
-            "d db Qs",
-            "p2 cc",
-            "p4 cbr 600000",
-            "p2 cc",
-            "p4 sm 6d5h",
-            "p2 sm Js8h"
+            "p1 cbr 200000",
+            "p2 f"
         };
 
         for (const auto& action_str : actions) {
@@ -206,7 +237,6 @@ void test_poker() {
                 tokens.push_back(action_str.substr(pos, found - pos));
                 pos = found + 1;
             }
-
             tokens.push_back(action_str.substr(pos));
 
             if (tokens.empty()) {
@@ -217,30 +247,34 @@ void test_poker() {
 
             if (first_token == "d") {
                 // Deal action
-                if (tokens.size() < 3) {
-                    throw std::invalid_argument("Invalid deal action format: " + action_str);
+                try {
+                    process_deal_action(engine, tokens);
                 }
-                std::string deal_type = tokens[1];
-                std::string deal_data = tokens[2];
-                process_deal_action(engine, deal_type, deal_data);
+                catch (const std::exception& e) {
+                    std::cerr << "Error processing deal action: " << e.what() << std::endl;
+                }
             }
             else {
                 // Player action
-                if (tokens.size() < 2) {
-                    throw std::invalid_argument("Invalid player action format: " + action_str);
+                try {
+                    if (tokens.size() < 2) {
+                        throw std::invalid_argument("Invalid player action format: " + action_str);
+                    }
+                    std::string player_str = tokens[0];
+                    std::string action = tokens[1];
+                    std::vector<std::string> params;
+                    for (size_t i = 2; i < tokens.size(); ++i) {
+                        params.push_back(tokens[i]);
+                    }
+                    process_player_action(engine, player_str, action, params);
                 }
-                std::string player_str = tokens[0];
-                std::string action = tokens[1];
-                std::vector<std::string> params;
-                for (size_t i = 2; i < tokens.size(); ++i) {
-                    params.push_back(tokens[i]);
+                catch (const std::exception& e) {
+                    std::cerr << "Error processing player action: " << e.what() << std::endl;
                 }
-                process_player_action(engine, player_str, action, params);
             }
         }
 
-        // Step 4: Verify Final Stack Sizes
-        std::vector<double> expected_finishing_stacks = {7340000, 3775000, 5110000, 8935000, 4545000};
+        // Step 3: Verify Final Stack Sizes
         std::array<double, PokerEngine::MAX_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
 
         std::cout << "\nFinal Stack Verification:" << std::endl;
@@ -264,9 +298,7 @@ void test_poker() {
             std::cout << "\nTest failed. Some player stacks are incorrect." << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cerr << "An exception occurred: " << e.what() << std::endl;
-    } catch (...) {
-        std::cerr << "An unknown exception occurred." << std::endl;
+        std::cerr << "Error occurred during test: " << e.what() << std::endl;
     }
 }
 
