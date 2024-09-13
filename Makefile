@@ -1,7 +1,7 @@
 # Compiler
 CXX = clang++
 # Compiler flags
-CXXFLAGS = -std=c++17 -Wall -Wextra -O3
+CXXFLAGS = -std=c++17 -w -O3
 
 # Include directories
 INCLUDES = -I./OMPEval
