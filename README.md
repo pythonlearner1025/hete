@@ -12,3 +12,20 @@ the lower the better
 TODO
 - check if opp range is correctly init in lbr.py
 - make wprollout calc 1000x more efficient
+
+# libtorch integration
+
+install libtorch 
+
+install libomp add it to ~/.bashrc or ~/.zshrc: 
+
+```bash export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH```
+
+run 
+
+```bash cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch``` 
+
+```make``` 
+
+```./model``` 
+

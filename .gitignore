@@ -5,3 +5,9 @@ exp/
 __pycache__/
 build/
 ompeval.cpython-312-darwin.so
+
+# ignore 
+src/model/model
+src/model/CMakeFiles
+src/models/CMakeCache.txt
+src/models/cmake_install.cmake

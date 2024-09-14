@@ -90,6 +90,14 @@ PokerEngine::PokerEngine(
         this->deck.assign(deck.begin() + card_index, deck.end());
     }
 }
+
+void PokerEngine::reset_actions() {
+    for (size_t i=0; i<this->n_players; ++i) {
+        if (this->players[i].status == PlayerStatus::Playing) {
+            this->players[i].acted = false;
+        }
+    }
+}
 /* 
     PUBLIC ACTIONS 
 */
@@ -120,7 +128,8 @@ void PokerEngine::bet_or_raise(int player, double amount) {
         this->players[player].bets_per_round[this->round].push_back(bet_amount);
         this->pot += bet_amount;
         this->players[player].status = PlayerStatus::AllIn;
-
+        reset_actions();
+        this->players[this->actor].acted = true;
         next_state();
         return;
     }
@@ -141,7 +150,8 @@ void PokerEngine::bet_or_raise(int player, double amount) {
     if (this->players[player].stack == 0) {
         this->players[player].status = PlayerStatus::AllIn;
     }
-
+    reset_actions();
+    this->players[this->actor].acted = true;
     next_state();
 }
 
@@ -167,7 +177,8 @@ void PokerEngine::check_or_call(int player) {
         // Player checks; record zero bet
         this->players[player].bets_per_round[this->round].push_back(0.0);
     }
-
+    
+    this->players[player].acted = true;
     next_state();
 }
 
@@ -210,6 +221,7 @@ void PokerEngine::deal_cards() {
 
     if (this->manual) {
         this->round++;
+        reset_actions();
         return;
     }
 
@@ -248,6 +260,7 @@ void PokerEngine::deal_cards() {
     }
 
     this->round++;
+    reset_actions();
 }
 
 bool PokerEngine::is_everyone_all_in() const {
@@ -276,20 +289,18 @@ double PokerEngine::get_current_max_bet() const {
 }
 
 bool PokerEngine::is_round_complete() const {
-    // if every live player has had a chance to act
-    // p2 cc -> 
-    double highest_bet = get_current_max_bet();
 
-    for (int i = 0; i < n_players; ++i) {
-        if (players[i].status == PlayerStatus::Playing) {
-            // leq because if eq, player can do check action.
-            // if less, player must cbr
-            if (players[i].total_bet < highest_bet || 
-                players[i].bets_per_round[this->round].size() == 0) {
-                return false;
-            }
+    // if even one alive player hasn't acted, round isn't complete
+    for (size_t i = 0; i < this->n_players; ++i) {
+        const auto& player = this->players[i];
+
+        if (player.status == PlayerStatus::Playing && !player.acted) {
+            return false;
         }
+        //std::cout << "Player " << i << ": Status = " << static_cast<int>(player.status) 
+        //         << ", Acted = " << (player.acted ? "true" : "false") << std::endl;
     }
+
     return true;
 }
 
@@ -328,8 +339,8 @@ void PokerEngine::next_state() {
             // Proceed to next betting round
             deal_cards();
         }
-        this->actor = 1;
-        if (this->players[1].status == PlayerStatus::Playing) return;
+        this->actor = 0;
+        if (this->players[0].status == PlayerStatus::Playing) return;
     }
 
     // Find the next player to act

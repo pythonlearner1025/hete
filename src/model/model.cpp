@@ -175,7 +175,36 @@ TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRMod
 // Example Usage
 // ========================
 
-int main() {
+// Factory functions
+void* create_deep_cfr_model(int64_t n_card_types, int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim = 256) {
+    return new DeepCFRModel(n_card_types, n_players, n_bets, n_actions, dim);
+}
+
+torch::Tensor deep_cfr_model_forward(void* model_ptr, std::vector<torch::Tensor> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
+    if (model_ptr == nullptr) {
+        throw std::invalid_argument("Model pointer is null.");
+    }
+    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+    return (*model)->forward(cards, bet_fracs, bet_status); // Corrected line
+}
+
+// Factory function to delete a DeepCFRModel instance
+void delete_deep_cfr_model(void* model_ptr) {
+    if (model_ptr != nullptr) {
+        DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+        delete model;
+    }
+}
+
+void set_model_eval_mode(void* model_ptr) {
+    if (model_ptr == nullptr) {
+        throw std::invalid_argument("Model pointer is null.");
+    }
+    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+    (*model)->eval(); // Correctly call eval()
+}
+
+int profile_net() {
     try {
         // Define model parameters
         int64_t n_card_types = 2; // e.g., hole and board

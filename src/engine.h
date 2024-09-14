@@ -62,6 +62,7 @@ public:
         omp::Hand hand;
         double stack;
         double total_bet = 0.0; // total bet across all rounds
+        bool acted = false;
         PlayerStatus status;
         std::array<std::vector<double>, 4> bets_per_round; // 4 betting rounds
     };
@@ -98,6 +99,7 @@ private:
     bool is_round_complete() const;
     bool is_everyone_all_in() const;
     bool should_force_check_or_call() const;
+    void reset_actions();
 
     void next_state();
     void end_game();

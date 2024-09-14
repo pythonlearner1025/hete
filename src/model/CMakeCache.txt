@@ -140,7 +140,7 @@ CMAKE_OSX_DEPLOYMENT_TARGET:STRING=
 CMAKE_OSX_SYSROOT:PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk
 
 //No help, variable specified on the command line.
-CMAKE_PREFIX_PATH:UNINITIALIZED=Users/minjunes/libtorch
+CMAKE_PREFIX_PATH:UNINITIALIZED=/Users/minjunes/libtorch
 
 //Value Computed by CMake
 CMAKE_PROJECT_DESCRIPTION:STATIC=
