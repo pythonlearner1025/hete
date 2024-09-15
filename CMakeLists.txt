@@ -15,8 +15,11 @@ endif()
 
 # Find LibTorch
 # Ensure that CMAKE_PREFIX_PATH includes the path to LibTorch
-# You can set it externally when invoking CMake:
+# I must set it externally when invoking CMake:
 # cmake -DCMAKE_PREFIX_PATH=/Users/minjunes/libtorch ..
+#find_package(Torch REQUIRED)
+set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
+
 find_package(Torch REQUIRED)
 
 # Include directories for OMPEval
@@ -55,6 +58,9 @@ file(GLOB_RECURSE NON_MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp" "${CMAKE_SOURCE
 
 # Gather model source files
 file(GLOB_RECURSE MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/model/*.cpp" "${CMAKE_SOURCE_DIR}/src/model/*.cxx")
+
+# Add model.h explicitly
+list(APPEND MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/model/model.h")
 
 # Combine all source files
 set(ALL_SRCS ${NON_MODEL_SRCS} ${MODEL_SRCS})

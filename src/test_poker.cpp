@@ -319,15 +319,10 @@ void process_deal_action(PokerEngine& engine, const std::vector<std::string>& to
         if (cards_str.length() != 4) {
             throw std::invalid_argument("Invalid number of cards for 'dh' action. Expected 2 cards.");
         }
-        std::vector<std::string> card_strings;
+        std::array<int, 2> cards;
         for (size_t i = 0; i + 1 < cards_str.length(); i += 2) {
-            card_strings.push_back(cards_str.substr(i, 2));
+            cards[i] = card_str_to_index(cards_str.substr(i, 2));
         }
-        if (card_strings.size() != 2) {
-            throw std::invalid_argument("Invalid number of cards for 'dh' action. Expected 2 cards.");
-        }
-
-        omp::Hand hand = create_hand(card_strings);
 
         // Map player string to index
         int player_index = -1;
@@ -341,7 +336,7 @@ void process_deal_action(PokerEngine& engine, const std::vector<std::string>& to
         }
 
         // Deal the hand to the player
-        engine.manual_deal_hand(player_index, hand);
+        engine.manual_deal_hand(player_index, cards);
         std::cout << "Dealt hand " << cards_str << " to " << player_str << "." << std::endl;
     }
     else if (deal_type == "db") {
@@ -356,9 +351,9 @@ void process_deal_action(PokerEngine& engine, const std::vector<std::string>& to
             throw std::invalid_argument("Invalid board cards string length.");
         }
 
-        std::vector<int> board;
+        std::array<int, 5> board;
         for (size_t i = 0; i + 1 < cards_str.length(); i += 2) {
-            board.push_back(card_str_to_index(cards_str.substr(i, 2)));
+            board[i] = card_str_to_index(cards_str.substr(i, 2));
         }
 
         engine.manual_deal_board(board);
@@ -495,7 +490,7 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
     }
 }
 
-int main() {
+int run() {
     // Define the directory containing .phh files
     const std::string directory_path = "/Users/minjunes/poker/phh-dataset/data/wsop/2023/43/5"; // Change this to your directory path
 

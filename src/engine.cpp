@@ -83,8 +83,8 @@ PokerEngine::PokerEngine(
         // Deal cards to players
         size_t card_index = 0;
         for (size_t player = 0; player < this->n_players; ++player) {
-            this->players[player].hand += omp::Hand(deck[card_index++]);
-            this->players[player].hand += omp::Hand(deck[card_index++]);
+            this->players[player].hand[0] = deck[card_index++];
+            this->players[player].hand[1] = deck[card_index++];
         }
         // Remaining deck starts from card_index
         this->deck.assign(deck.begin() + card_index, deck.end());
@@ -102,13 +102,22 @@ void PokerEngine::reset_actions() {
     PUBLIC ACTIONS 
 */
 
+bool PokerEngine::can_fold(int player) const {
+    return true;
+}
+
 void PokerEngine::fold(int player) {
     if (player != this->actor) {
+        std::cout << "Player mismatch: folding player " + std::to_string(player) + " is not the current actor " + std::to_string(this->actor) << std::endl;
         throw std::runtime_error("Player mismatch: folding player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));
     }
     this->players[player].status = PlayerStatus::Folded;
     // No need to adjust pot or bets here since the player forfeits their current bet
     next_state();
+}
+
+bool PokerEngine::can_bet_or_raise(int player, double amount) const {
+    return !verify_sufficient_funds(player, amount);
 }
 // side pot:
 // when a player calls or bets when 
@@ -153,6 +162,10 @@ void PokerEngine::bet_or_raise(int player, double amount) {
     reset_actions();
     this->players[this->actor].acted = true;
     next_state();
+}
+
+bool PokerEngine::can_check_or_call(int player) const {
+    return true;
 }
 
 void PokerEngine::check_or_call(int player) {
@@ -229,7 +242,7 @@ void PokerEngine::deal_cards() {
     std::mt19937 rng(rd());
 
     switch (this->round) {
-        case 1: // Flop
+        case 0: // Flop
             for (int i = 0; i < 3; ++i) {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
@@ -238,7 +251,7 @@ void PokerEngine::deal_cards() {
                 this->deck.erase(this->deck.begin() + idx);
             }
             break;
-        case 2: // Turn
+        case 1: // Turn
             {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
@@ -246,7 +259,7 @@ void PokerEngine::deal_cards() {
                 this->board.push_back(card);
                 this->deck.erase(this->deck.begin() + idx);
             }
-        case 3: // River
+        case 2: // River
             {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
@@ -406,12 +419,16 @@ void PokerEngine::showdown() {
     omp::HandEvaluator evaluator;
     for (size_t i=0; i < this->n_players; ++i) {
         if (this->players[i].status == PlayerStatus::Playing || this->players[i].status == PlayerStatus::AllIn) {
-            // add board card to live player hands
+            omp::Hand hand = omp::Hand::empty();
+            // add hole cards 
+            hand += omp::Hand(this->players[i].hand[0]);
+            hand += omp::Hand(this->players[i].hand[1]);
+            // add board card 
             for (size_t j=0; j < this->board.size(); ++j) {
-                this->players[i].hand += this->board[j];
+                hand += omp::Hand(this->board[j]);
             }
             // eval strength
-            int hand_strength = evaluator.evaluate(this->players[i].hand);
+            int hand_strength = evaluator.evaluate(hand);
             // add to vec
             hand_strengths.push_back({i, hand_strength});
         }
@@ -513,6 +530,18 @@ bool PokerEngine::should_force_check_or_call() const {
 
 /* PUBLIC QUERIES */ 
 
+std::array<int, 5> PokerEngine::get_board() const {
+    std::array<int, 5> ret;
+    for (size_t i = 0; i < 5; ++i) {
+        if (i < this->board.size()) {
+            ret[i] = this->board[i];
+        } else {
+            ret[i] = -1;
+        }
+    }
+    return ret;
+}
+
 std::pair<std::array<bool, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>, std::array<double, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>> PokerEngine::construct_history() const {
     constexpr int total_bets = 4 * MAX_PLAYERS * MAX_ROUND_BETS;
 
@@ -550,7 +579,7 @@ std::pair<std::array<bool, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND
 /* MANUAL MODE */
 
 // Manual Dealing: Assign a Specific Hand to a Player
-void PokerEngine::manual_deal_hand(int player, const omp::Hand& hand) {
+void PokerEngine::manual_deal_hand(int player, std::array<int, 2> hand) {
     if (!manual) {
         throw std::runtime_error("Cannot deal manually when not in manual mode.");
     }
@@ -560,18 +589,21 @@ void PokerEngine::manual_deal_hand(int player, const omp::Hand& hand) {
     }
 
        // Assign the new hand to the player
-    this->players[player].hand = hand;
+    this->players[player].hand[0] = hand[0];
+    this->players[player].hand[1] = hand[1];
 }
 
 // Manual Dealing: Assign Specific Cards to the Board
-void PokerEngine::manual_deal_board(const std::vector<int>& board_cards) {
+void PokerEngine::manual_deal_board(const std::array<int, 5> board_cards) {
     if (!manual) {
         throw std::runtime_error("Cannot deal manually when not in manual mode.");
     }
 
     // Assign the new board cards
     for (int card : board_cards) {
-        this->board.push_back(card);
+        if (card >= 0) {
+            this->board.push_back(card);
+        }
     }
 
     // Optionally, update the round if the board is fully dealt
@@ -595,21 +627,34 @@ std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_finishing_stacks()
     return stacks;
 }
 
-const std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_payoffs() const {
+std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_payoffs() const {
     return this->payoffs;
 }
 
-bool PokerEngine::is_in(int player) const {
+bool PokerEngine::is_playing(int player) const {
+    return this->players[player].status == PlayerStatus::Playing;
+}
+
+bool PokerEngine::get_game_status() const {
     // TODO: Implement
-    return false;
+    return this->game_status;
 }
 
 int PokerEngine::turn() const {
     // TODO: Implement
-    return 0;
+    return this->actor;
+}
+
+double PokerEngine::get_big_blind() const {
+    return this->big_blind;
+}
+
+double PokerEngine::get_pot() const {
+    return this->pot;
 }
 
 // copy 
 PokerEngine PokerEngine::copy() const {
     return *this;
 }
+

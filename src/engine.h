@@ -12,7 +12,7 @@
 class PokerEngine {
 public:
     // constants
-    static const int MAX_PLAYERS = 6;
+    static const int MAX_PLAYERS = 2;
     static const int BOARD_SIZE = 5;
     static const int MAX_ROUND_BETS = 4;
 
@@ -30,8 +30,18 @@ public:
     ~PokerEngine() = default;
 
     // queries
-    bool is_in(int player) const;
+    bool get_game_status() const;
+    std::array<double, MAX_PLAYERS> get_payoffs() const;
     int turn() const;
+    double get_big_blind() const;
+    bool is_playing(int player) const;
+    std::array<double, PokerEngine::MAX_PLAYERS> get_finishing_stacks() const;
+    double get_pot() const;
+
+    // action verification functions
+    bool can_fold(int player) const;
+    bool can_check_or_call(int player) const;
+    bool can_bet_or_raise(int player, double amount) const;
 
     // Actions
     void fold(int player);
@@ -43,13 +53,12 @@ public:
     bool verify_sufficient_funds(int player, double amount) const;
 
     // Utility functions
-    const std::array<double, MAX_PLAYERS> get_payoffs() const;
     void reset();
     PokerEngine copy() const;
 
     // manual mode
-    void manual_deal_hand(int player, const omp::Hand& hand);
-    void manual_deal_board(const std::vector<int>& board_cards);
+    void manual_deal_hand(int player, std::array<int, 2> hand);
+    void manual_deal_board(const std::array<int, 5> board_cards);
 
     // game act
     void showdown();
@@ -59,7 +68,7 @@ public:
 
     enum class PlayerStatus { Playing, Folded, AllIn, Out };
     struct Player {
-        omp::Hand hand;
+        std::array<int, 2> hand;
         double stack;
         double total_bet = 0.0; // total bet across all rounds
         bool acted = false;
@@ -67,8 +76,7 @@ public:
         std::array<std::vector<double>, 4> bets_per_round; // 4 betting rounds
     };
 
-    std::array<double, MAX_PLAYERS> get_finishing_stacks() const;
-
+    std::array<int, 5> get_board() const;
     std::array<Player, MAX_PLAYERS> players;
 
 private:
@@ -80,8 +88,8 @@ private:
     int actor;
     int bet_idx;
     int pot;
-    bool game_status;
     bool manual;
+    bool game_status;
 
     std::vector<int> bet_status;
     std::vector<double> bet_history_raw;

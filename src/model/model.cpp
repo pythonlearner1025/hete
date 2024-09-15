@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <chrono>
+#include <cassert>
 
 // ========================
 // CardEmbedding Module
@@ -24,7 +25,6 @@ struct CardEmbeddingImpl : torch::nn::Module {
 
     // Forward pass
     torch::Tensor forward(torch::Tensor input) {
-        // Input shape: [B, num_cards]
         auto B = input.size(0);
         auto num_cards = input.size(1);
         
@@ -82,9 +82,12 @@ struct DeepCFRModelImpl : torch::nn::Module {
     int64_t dim;
 
     // Constructor
-    DeepCFRModelImpl(int64_t n_card_types, int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim_ = 256)
+    DeepCFRModelImpl(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim_ = 256)
         : dim(dim_) {
         
+        int64_t n_card_types = 4;
+        // Assert that n_actions is smaller than the max defined in model.h
+        assert(n_actions <= MAX_ACTIONS && "n_actions must be smaller than or equal to MAX_ACTIONS defined in model.h");
         // Initialize card_embeddings ModuleList
         card_embeddings = register_module("card_embeddings", torch::nn::ModuleList());
 
@@ -102,7 +105,8 @@ struct DeepCFRModelImpl : torch::nn::Module {
         // Initialize bet linear layers
         int64_t nrounds = 4;
         // Calculate input size based on the formula: (n_bets * n_players * nrounds - nrounds) * 2
-        int64_t bet_input_size = (n_bets * n_players * nrounds - nrounds) * 2;
+        int64_t bet_input_size = (n_bets * n_players * nrounds) * 2;
+        std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
         bet1 = register_module("bet1", torch::nn::Linear(bet_input_size, dim));
         bet2 = register_module("bet2", torch::nn::Linear(dim, dim));
 
@@ -118,7 +122,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
     }
 
     // Forward pass
-    torch::Tensor forward(std::vector<torch::Tensor> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
+    torch::Tensor forward(std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
         /*
         Parameters:
             cards: std::vector<torch::Tensor> of size n_card_types
@@ -166,6 +170,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, n_actions]
+        std::cout << "forward complete" << std::endl;
         return output;
     }
 };
@@ -176,11 +181,11 @@ TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRMod
 // ========================
 
 // Factory functions
-void* create_deep_cfr_model(int64_t n_card_types, int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim = 256) {
-    return new DeepCFRModel(n_card_types, n_players, n_bets, n_actions, dim);
+void* create_deep_cfr_model(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim = 256) {
+    return new DeepCFRModel(n_players, n_bets, n_actions, dim);
 }
 
-torch::Tensor deep_cfr_model_forward(void* model_ptr, std::vector<torch::Tensor> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
+torch::Tensor deep_cfr_model_forward(void* model_ptr, std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
     if (model_ptr == nullptr) {
         throw std::invalid_argument("Model pointer is null.");
     }
@@ -204,6 +209,14 @@ void set_model_eval_mode(void* model_ptr) {
     (*model)->eval(); // Correctly call eval()
 }
 
+int64_t get_action_head_dim(void* model_ptr) {
+    if (model_ptr == nullptr) {
+        throw std::invalid_argument("Model pointer is null.");
+    }
+    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+    return (*model)->action_head->weight.size(0);
+}
+
 int profile_net() {
     try {
         // Define model parameters
@@ -214,19 +227,19 @@ int profile_net() {
         int64_t dim = 256;
 
         // Instantiate the model
-        DeepCFRModel model(n_card_types, n_players, n_bets, n_actions, dim);
+        DeepCFRModel model(n_players, n_bets, n_actions, dim);
 
         // Set the model to evaluation mode
         model->eval();
 
         // Create dummy input data
         int64_t N = 5; // Batch size
-        std::vector<torch::Tensor> cards;
+        std::array<torch::Tensor, 4> cards;
         
         // Example card groups: [N, 2] and [N, 3]
         // Using -1 to indicate 'no card'
-        cards.push_back(torch::randint(-1, 52, {N, 2}, torch::kInt64));
-        cards.push_back(torch::randint(-1, 52, {N, 3}, torch::kInt64));
+        cards[0] = torch::randint(-1, 52, {N, 2}, torch::kInt64);
+        cards[1] = torch::randint(-1, 52, {N, 3}, torch::kInt64);
         
         // Calculate bet_input_size based on the constructor formula
         int64_t nrounds = 4;
