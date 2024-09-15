@@ -106,7 +106,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         int64_t nrounds = 4;
         // Calculate input size based on the formula: (n_bets * n_players * nrounds - nrounds) * 2
         int64_t bet_input_size = (n_bets * n_players * nrounds) * 2;
-        std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
+        //std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
         bet1 = register_module("bet1", torch::nn::Linear(bet_input_size, dim));
         bet2 = register_module("bet2", torch::nn::Linear(dim, dim));
 
@@ -170,7 +170,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, n_actions]
-        std::cout << "forward complete" << std::endl;
+        //std::cout << "forward complete" << std::endl;
         return output;
     }
 };
