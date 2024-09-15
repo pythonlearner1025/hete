@@ -1,6 +1,7 @@
 // cfr.cpp
 
 #include "cfr.h"
+#include "debug.h"  // Include the debug header
 #include <torch/torch.h>
 #include <tuple>
 #include <thread>
@@ -10,6 +11,8 @@
 #include <cstdlib> // For rand()
 #include <ctime>   // For seeding rand()
 #include <chrono>
+#include <iomanip> // For std::put_time
+#include <sstream> // For std::stringstream
 
 // for debugging
 std::atomic<int> total_traversals(0);
@@ -36,13 +39,15 @@ void get_cards(PokerEngine& game, int player, Infoset& I) {
         if (board[i] != -1) board_size++;
     }
 
-    //std::cout << "Player hand: " << game.players[player].hand[0] << ", " << game.players[player].hand[1] << std::endl;
+    DEBUG_INFO("Player hand: " << game.players[player].hand[0] << ", " << game.players[player].hand[1]);
+
     I.cards[0] = torch::tensor({static_cast<int64_t>(game.players[player].hand[0]), 
                                 static_cast<int64_t>(game.players[player].hand[1])}).view({1, 2});
 
-    //std::cout << "Board size: " << board_size << std::endl;
+    DEBUG_INFO("Board size: " << board_size);
+
     if (board_size >= 3) {
-        //std::cout << "Flop: " << board[0] << ", " << board[1] << ", " << board[2] << std::endl;
+        DEBUG_INFO("Flop: " << board[0] << ", " << board[1] << ", " << board[2]);
         I.cards[1] = torch::tensor({static_cast<int64_t>(board[0]), 
                                     static_cast<int64_t>(board[1]), 
                                     static_cast<int64_t>(board[2])}).view({1, 3});
@@ -51,14 +56,14 @@ void get_cards(PokerEngine& game, int player, Infoset& I) {
     }
 
     if (board_size >= 4) {
-        //std::cout << "Turn: " << board[3] << std::endl;
+        DEBUG_INFO("Turn: " << board[3]);
         I.cards[2] = torch::tensor({static_cast<int64_t>(board[3])}).view({1, 1});
     } else {
         I.cards[2] = torch::tensor({-1}).view({1, 1});
     }
 
     if (board_size >= 5) {
-        //std::cout << "River: " << board[4] << std::endl;
+        DEBUG_INFO("River: " << board[4]);
         I.cards[3] = torch::tensor({static_cast<int64_t>(board[4])}).view({1, 1});
     } else {
         I.cards[3] = torch::tensor({-1}).view({1, 1});
@@ -127,7 +132,7 @@ int sample_action(const std::array<double, MAX_ACTIONS>& strat, int n_acts) {
 }
 
 void take_action(PokerEngine& engine, int player, int act, int n_acts) {
-    //std::cout << "chosen act: " + std::to_string(act) << std::endl;
+    DEBUG_INFO("Chosen act: " << act);
     if (act == 0) {
         engine.fold(player);
         return;
@@ -174,25 +179,24 @@ double traverse(
     std::vector<TraverseAdvantage>& traverse_advs,
     std::mutex& advs_mutex
 ) {
-    //std::cout << get_timestamp() << " Entering traverse()" << std::endl;
-    //std::cout << get_timestamp() << " Game status: " << engine.get_game_status() << ", Is player playing: " << engine.is_playing(player) << std::endl;
+    DEBUG_INFO(get_timestamp() << " Entering traverse()");
+    DEBUG_INFO(get_timestamp() << " Game status: " << engine.get_game_status() << ", Is player playing: " << engine.is_playing(player));
 
     total_traversals++;
     // Check if game is done for this player
     if (!engine.get_game_status() || !engine.is_playing(player)) {
-        //std::cout << get_timestamp() << " Game over" << std::endl;
+        DEBUG_INFO(get_timestamp() << " Game over");
         std::array<double, PokerEngine::MAX_PLAYERS> payoff = engine.get_payoffs();
-        /*
         for (size_t i=0; i<nets.size(); ++i) {
-            std::cout << "player " + std::to_string(i) + " payoff: " + std::to_string(payoff[i]) + "\n";
+            DEBUG_INFO("player " << i << " payoff: " << payoff[i]);
         }
-        std::cout << std::endl;
-        */
+        DEBUG_INFO(""); // For additional newline
+
         double bb = engine.get_big_blind();
         return payoff[player] / bb;
     }
     else if (engine.turn() == player) {
-        //std::cout << get_timestamp() << " My turn" << std::endl;
+        DEBUG_INFO(get_timestamp() << " My turn");
 
         void* net_ptr = nets[player][nets[player].size()-1];
 
@@ -200,7 +204,7 @@ double traverse(
 
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
 
-        //std::cout << get_timestamp() << " Neural network logits: " << logits << std::endl;
+        DEBUG_INFO(get_timestamp() << " Neural network logits: " << logits);
 
         int n_acts = get_action_head_dim(net_ptr);
         // Regret matching
@@ -218,10 +222,10 @@ double traverse(
             // ensure game state doesn't change
             if (!verify_action(engine, player, a, n_acts)) {
                 is_illegal[a] = true;
-                //std::cout << "action is illegal, skipping: " + std::to_string(a) << std::endl;
+                DEBUG_INFO("action is illegal, skipping: " << a);
                 continue;
             } else {
-                //std::cout << "action is legal, modeling: " + std::to_string(a) << std::endl;
+                DEBUG_INFO("action is legal, modeling: " << a);
             }
 
             // Create a copy of the game state
@@ -241,12 +245,12 @@ double traverse(
                 traverse_advs,
                 advs_mutex
             );
-            //std::cout << "value: " + std::to_string(value) + " strat %: " + std::to_string(strat[a]) << std::endl;
+            DEBUG_INFO("value: " << value << " strat %: " << strat[a]);
             values[a] = value;
             ev += value * strat[a];
         }
 
-        //std::cout << get_timestamp() << " Calculated advantages: ";
+        DEBUG_INFO(get_timestamp() << " Calculated advantages: ");
         for (size_t a = 0; a < n_acts; ++a) {
             if (!is_illegal[a]) {
                 double adv = values[a] - ev;
@@ -255,10 +259,9 @@ double traverse(
                 // TODO what should illegal act adv be? 
                 advs[a] = 0.0;
             }
-         //   std::cout << advs[a] << " ";
+            DEBUG_INFO(advs[a] << " ");
         }
-        //std::cout << std::endl;
-
+        DEBUG_INFO(""); // For newline
 
         // Add to traverse_advs with synchronization
         TraverseAdvantage ta;
@@ -268,15 +271,16 @@ double traverse(
 
         {
             std::lock_guard<std::mutex> lock(advs_mutex);
+            DEBUG_INFO(get_timestamp() << "ev: " << ev);
             traverse_advs.emplace_back(ta);
         }
 
         // Return expected value
-        //std::cout << get_timestamp() << "ev: " + std::to_string(ev) << std::endl;
+        DEBUG_INFO(get_timestamp() << "ev: " << ev);
         return ev;
     }
     else {
-        //std::cout << get_timestamp() << " Opponent's turn" << std::endl;
+        DEBUG_INFO(get_timestamp() << " Opponent's turn");
         // Opponent's turn
         int actor = engine.turn();
         void* net_ptr = nets[actor][nets[actor].size()-1];
@@ -298,7 +302,7 @@ double traverse(
         // Take action
         take_action(engine, actor, action_index, n_acts);
 
-        //std::cout << get_timestamp() << " Opponent's turn. Selected action: " << action_index << std::endl;
+        DEBUG_INFO(get_timestamp() << " Opponent's turn. Selected action: " << action_index);
 
         // Recursive call
         return traverse(
@@ -313,6 +317,7 @@ double traverse(
 }
 
 // Function to run multiple traversals in parallel
+// TODO - why is pot always no greater than big blind?
 int main() {
     int num_traversals = 100000;
     int player = 0;
@@ -330,11 +335,11 @@ int main() {
     if (num_threads == 0) num_threads = 4; // Fallback to 4 if unable to detect
     //num_threads = 1;
 
-    std::cout << "total threads: " + std::to_string(num_threads) << std::endl;
+    DEBUG_INFO("Total threads: " << num_threads);
 
     // Function for each thread to execute
     auto thread_func = [&](int traversals_per_thread, int thread_id) {
-        //std::cout << get_timestamp() << " Thread " << thread_id << " starting with " << traversals_per_thread << " traversals" << std::endl;
+        DEBUG_INFO(get_timestamp() << " Thread " << thread_id << " starting with " << traversals_per_thread << " traversals");
         int local_traversals = 0;
         int local_advantages = 0;
 
@@ -364,13 +369,13 @@ int main() {
             }
             catch(const std::exception& e) {
                 // Handle exceptions (e.g., log and continue)
-                std::cout << e.what() << std::endl;
+                DEBUG_INFO(e.what());
                 continue;
             }
             // Add local_traverse_advs to the shared all_traverse_advs with synchronization
             {
                 std::lock_guard<std::mutex> lock(advs_mutex);
-                //std::cout << get_timestamp() << " Thread " << thread_id << " adding " << local_traverse_advs.size() << " advantages" << std::endl;
+                DEBUG_INFO(get_timestamp() << " Thread " << thread_id << " adding " << local_traverse_advs.size() << " advantages");
                 all_traverse_advs.insert(all_traverse_advs.end(), local_traverse_advs.begin(), local_traverse_advs.end());
             }
         }
@@ -379,9 +384,9 @@ int main() {
 
     // Calculate traversals per thread
     int traversals_per_thread = num_traversals / num_threads;
-    std::cout << "traversals per thread: " << std::to_string(traversals_per_thread) << std::endl;
+    DEBUG_INFO("Traversals per thread: " << traversals_per_thread);
     int remaining_traversals = num_traversals % num_threads;
-    std::cout << "remaining traversals: " << std::to_string(remaining_traversals) << std::endl;
+    DEBUG_INFO("Remaining traversals: " << remaining_traversals);
 
     // Create threads
     auto start = std::chrono::high_resolution_clock::now();
@@ -405,11 +410,11 @@ int main() {
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
     auto throughput = static_cast<double>(num_traversals) / duration.count();
 
-    std::cout << "all jobs done" << std::endl;
-    std::cout << get_timestamp() << " Total traversals: " << total_traversals.load() << std::endl;
-    std::cout << get_timestamp() << " Total advantages collected: " << total_advantages.load() << std::endl;
-    std::cout << get_timestamp() << " Size of all_traverse_advs: " << all_traverse_advs.size() << std::endl;
-    std::cout << get_timestamp() << " Throughput: " << throughput << " traversals/s" << std::endl;
+    DEBUG_INFO("All jobs done");
+    DEBUG_INFO(get_timestamp() << " Total traversals: " << total_traversals.load());
+    DEBUG_INFO(get_timestamp() << " Total advantages collected: " << total_advantages.load());
+    DEBUG_INFO(get_timestamp() << " Size of all_traverse_advs: " << all_traverse_advs.size());
+    DEBUG_INFO(get_timestamp() << " Throughput: " << throughput << " traversals/s");
 
     return 0;
 }
