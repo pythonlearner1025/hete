@@ -5,8 +5,8 @@
 
 #include <torch/torch.h>
 #include <vector>
+#include "../constants.h"
 
-constexpr int MAX_ACTIONS = 6;
 // Forward declaration of the model struct
 struct DeepCFRModelImpl;
 using DeepCFRModel = torch::nn::ModuleHolder<DeepCFRModelImpl>;

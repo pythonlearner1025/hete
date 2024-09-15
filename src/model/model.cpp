@@ -86,8 +86,6 @@ struct DeepCFRModelImpl : torch::nn::Module {
         : dim(dim_) {
         
         int64_t n_card_types = 4;
-        // Assert that n_actions is smaller than the max defined in model.h
-        assert(n_actions <= MAX_ACTIONS && "n_actions must be smaller than or equal to MAX_ACTIONS defined in model.h");
         // Initialize card_embeddings ModuleList
         card_embeddings = register_module("card_embeddings", torch::nn::ModuleList());
 

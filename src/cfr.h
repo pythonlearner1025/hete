@@ -9,6 +9,7 @@
 #include <torch/torch.h>
 #include "engine.h"
 #include "model/model.h"
+#include "constants.h"
 
 // Define a structure for Infoset
 struct Infoset {
@@ -28,21 +29,20 @@ struct TraverseAdvantage {
 double traverse(
     PokerEngine& engine, 
     int player,
-    std::vector<std::vector<void*>>& nets,
+    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS> nets,
     int t,
     int max_bets_per_player,
-    std::vector<TraverseAdvantage>& traverse_advs,
+    std::array<TraverseAdvantage, MAX_ADVS> all_traverse_advs,
     std::mutex& advs_mutex
 );
 
 // Function to run multiple traversals in parallel
 void run_traversals(
-    int num_traversals,
     int player,
-    std::vector<std::vector<void*>>& nets,
+    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS> nets,
     int t,
     int max_bets_per_player,
-    std::vector<TraverseAdvantage>& all_traverse_advs,
+    std::array<TraverseAdvantage, MAX_ADVS> all_traverse_advs,
     std::mutex& advs_mutex
 );
 

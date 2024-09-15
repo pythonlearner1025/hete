@@ -5,19 +5,15 @@
 #include <cmath>    // For std::abs
 #include <iomanip>  // For std::setprecision
 #include "tests.h"
-
-// Define MAX_ACTIONS if not already defined
-#ifndef MAX_ACTIONS
-#define MAX_ACTIONS 10
-#endif
+#include "debug.h"
 
 // Existing regret_match function
-std::array<double, MAX_ACTIONS> new_regret_match(const torch::Tensor& logits, int n_acts) {
+std::array<double, TEST_MAX_ACTIONS> new_regret_match(const torch::Tensor& logits, int n_acts) {
     auto relu_logits = torch::relu(logits);
     
     double logits_sum = relu_logits.sum().item<double>();
     
-    std::array<double, MAX_ACTIONS> strat;
+    std::array<double, TEST_MAX_ACTIONS> strat;
     
     // If the sum is positive, calculate the strategy
     if (logits_sum > 0) {
@@ -29,8 +25,8 @@ std::array<double, MAX_ACTIONS> new_regret_match(const torch::Tensor& logits, in
         for (int i = 0; i < n_acts; ++i) {
             strat[i] = static_cast<double>(strategy_tensor[i].item<float>());
         }
-        // Fill remaining actions with 0.0 if n_acts < MAX_ACTIONS
-        for (int i = n_acts; i < MAX_ACTIONS; ++i) {
+        // Fill remaining actions with 0.0 if n_acts < TEST_MAX_ACTIONS
+        for (int i = n_acts; i < TEST_MAX_ACTIONS; ++i) {
             strat[i] = 0.0;
         }
     } 
@@ -38,7 +34,7 @@ std::array<double, MAX_ACTIONS> new_regret_match(const torch::Tensor& logits, in
     else {
         auto max_index = torch::argmax(relu_logits).item<int>();
         std::fill(strat.begin(), strat.end(), 0.0);
-        if (max_index < MAX_ACTIONS) { // Ensure max_index is within bounds
+        if (max_index < TEST_MAX_ACTIONS) { // Ensure max_index is within bounds
             strat[max_index] = 1.0;
         }
     }
@@ -84,9 +80,9 @@ void test_regret_match() {
         {torch::tensor({-1.0, -2.0, -3.0}), 3, "All logits negative"},
         // Test Case 6: Single action
         {torch::tensor({5.0}), 1, "Single action"},
-        // Test Case 7: Large number of actions (n_acts < MAX_ACTIONS)
+        // Test Case 7: Large number of actions (n_acts < TEST_MAX_ACTIONS)
         {torch::tensor({1.0, 2.0, 3.0, 4.0, 5.0}), 5, "Five actions"},
-        // Test Case 8: n_acts less than MAX_ACTIONS with padding
+        // Test Case 8: n_acts less than TEST_MAX_ACTIONS with padding
         {torch::tensor({1.0, 0.0, 3.0}), 3, "Three actions with padding"},
         // Test Case 9: Logits leading to denominator zero in some actions
         {torch::tensor({1.0, 1.0, 2.0}), 3, "Denominator zero scenario"},
@@ -105,7 +101,7 @@ void test_regret_match() {
         std::cout << "\nNumber of Actions (n_acts): " << tc.n_acts << "\n";
 
         // Call regret_match
-        std::array<double, MAX_ACTIONS> strat = new_regret_match(tc.logits, tc.n_acts);
+        std::array<double, TEST_MAX_ACTIONS> strat = new_regret_match(tc.logits, tc.n_acts);
 
         // Print strat
         std::cout << "Strategy (strat): [";
@@ -179,8 +175,37 @@ void test_regret_match() {
     }
 }
 
-// Example main function to run the test
+// Sample an action according to the strategy probabilities
+int test_sample_action(const std::array<double, 5>& strat, int n_acts) {
+    double r = static_cast<double>(rand()) / RAND_MAX;
+    double cumulative = 0.0;
+    for (int i = 0; i < n_acts; ++i) {
+        cumulative += strat[i];
+        if (r <= cumulative) {
+            return i;
+        }
+    }
+    return n_acts - 1; // Return last valid action if none selected
+}
+
 /*
+int main() {
+    std::array<double, 5> strat = {0.1, 0.1, 0.5, 0.2, 0.1};
+    std::array<double, 5> sampled = {0.0, 0.0, 0.0, 0.0, 0.0};
+    int n_acts = 5;
+    int n_samples = 10000;
+    for (size_t i=0; i<n_samples; ++i) {
+        int s = test_sample_action(strat, n_acts);
+        sampled[s] += 1.0;
+    }
+    for (size_t i=0; i<5; ++i) {
+        sampled[i] /= static_cast<double>(n_samples);
+        DEBUG_INFO("idx " << i << " = " << sampled[i]);
+    }
+    return 0;
+}
+
+// Example main function to run the test
 int main() {
     test_regret_match();
     return 0;

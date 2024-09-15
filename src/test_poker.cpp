@@ -11,6 +11,7 @@
 #include "ParsedPHH.h"
 #include <fstream>
 #include <sstream>
+#include <cassert>
 
 namespace fs = std::filesystem;
 // Helper function to trim whitespace from both ends of a string
@@ -170,15 +171,24 @@ bool parse_phh(const std::string& file_path, ParsedPHH& phh) {
         return false;
     }
 
-    // Populate the ParsedPHH structure
-    phh.starting_stacks = starting_stacks;
-    phh.finishing_stacks = finishing_stacks;
+    std::array<double, PHH_NUM_PLAYERS> start_stacks_array;
+    std::array<double, PHH_NUM_PLAYERS> finish_stacks_array;
+    std::array<double, PHH_NUM_PLAYERS> antes_array;
+
+    for (size_t i=0; i<PHH_NUM_PLAYERS; ++i) {
+        start_stacks_array[i] = starting_stacks[i];
+        finish_stacks_array[i] = finishing_stacks[i];
+        antes_array[i] = antes[i];
+    }
+    phh.starting_stacks = start_stacks_array;
+    phh.finishing_stacks = finish_stacks_array;
+
     phh.n_players = static_cast<int>(starting_stacks.size());
     if (!has_blinds_or_straddles){
         phh.small_bet = min_bet;
         phh.big_bet = min_bet * 2; // Assuming big_bet is twice the small_bet
     }
-    phh.antes = antes;
+    phh.antes = antes_array;
     phh.actions = actions;
     std::cout << "\n-- Processing phh " + file_path + " --\n";
     return true;
@@ -372,11 +382,11 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
         // Adjust constructor parameters as per your implementation
 
         // Extract parameters
-        std::vector<double> starting_stacks = phh.starting_stacks;
+        std::array<double, PHH_NUM_PLAYERS> starting_stacks = phh.starting_stacks;
         int n_players = phh.n_players;
         double small_bet = phh.small_bet;
         double big_bet = phh.big_bet;
-        std::vector<double> antes = phh.antes;
+        std::array<double, PHH_NUM_PLAYERS> antes = phh.antes;
 
         std::vector<std::string> actions = phh.actions;
         int starting_actor = 2;
@@ -457,7 +467,7 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
         }
 
         // After processing actions, verify finishing stacks
-        std::array<double, PokerEngine::MAX_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
+        std::array<double, MAX_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
 
         // Compare actual_finishing_stacks with phh.finishing_stacks
         for (int i = 0; i < n_players; ++i) {

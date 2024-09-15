@@ -8,8 +8,8 @@
 #include <sstream> // For std::stringstream
 
 PokerEngine::PokerEngine(
-    std::vector<double> starting_stacks, 
-    std::vector<double> antes, 
+    std::array<double, NUM_PLAYERS> starting_stacks, 
+    std::array<double, NUM_PLAYERS> antes, 
     int actor, 
     int n_players, 
     double small_blind, 
@@ -41,6 +41,12 @@ PokerEngine::PokerEngine(
     if (this->n_players != starting_stacks.size()) {
         throw std::invalid_argument("starting_stacks size must equal n_players"); 
     }
+    // init empty board
+    this->board[0] = 69;
+    this->board[1] = 69;
+    this->board[2] = 69;
+    this->board[3] = 69;
+    this->board[4] = 69;
     
     // Initialize players
     for (int i = 0; i < n_players; ++i) {
@@ -48,7 +54,9 @@ PokerEngine::PokerEngine(
         this->players[i].status = PlayerStatus::Playing;
         // Initialize bets_per_round for each player
         for (int r = 0; r < 4; ++r) {
-            this->players[i].bets_per_round[r].reserve(MAX_ROUND_BETS);
+            for (int b = 0; b < MAX_ROUND_BETS; ++b) {
+                this->players[i].bets_per_round[r][b] = -1.0;
+            }
         }
     }
 
@@ -67,13 +75,16 @@ PokerEngine::PokerEngine(
     // Initialize blinds
     this->players[0].stack -= small_blind;
     this->players[0].total_bet += small_blind;
-    this->players[0].bets_per_round[0].push_back(small_blind);
+    this->players[0].bets_per_round[0][0] = small_blind;
 
     this->players[1].stack -= big_blind;
     this->players[1].total_bet += big_blind;
-    this->players[1].bets_per_round[0].push_back(big_blind);
+    this->players[1].bets_per_round[0][0] = big_blind;
 
-    this->pot += (small_blind + big_blind);
+    this->pot += small_blind;
+    this->pot += big_blind;
+
+    DEBUG_INFO("init pot" << this->pot);
 
     // Initialize and shuffle the deck once
     if (!manual) {
@@ -114,15 +125,18 @@ void PokerEngine::fold(int player) {
         DEBUG_INFO("Player mismatch: folding player " << player << " is not the current actor " << this->actor);
         throw std::runtime_error("Player mismatch: folding player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));
     }
+    DEBUG_INFO("player " << player << " folds");
     this->players[player].status = PlayerStatus::Folded;
     // No need to adjust pot or bets here since the player forfeits their current bet
     next_state();
 }
 
 bool PokerEngine::can_bet_or_raise(int player, double amount) const {
-    return !verify_sufficient_funds(player, amount);
+    bool ret = verify_sufficient_funds(player, amount);
+    DEBUG_INFO("can player " << player << " bet or raise " << amount);
+    DEBUG_INFO("answer: " << ret);
+    return ret;
 }
-
 // side pot:
 // when a player calls or bets when 
 // their total stack < min_bet_amt 
@@ -132,13 +146,18 @@ void PokerEngine::bet_or_raise(int player, double amount) {
     }
 
     double min_bet_amt = calc_min_bet_amt(player);
-
+    DEBUG_INFO("player " << player << " betting " <<amount);
     // Handle all-in scenarios
+    int bet_idx = 0;
+    for (int b=0; b<MAX_ROUND_BETS; ++b) {
+        if (this->players[player].bets_per_round[this->round][b] >= 0) bet_idx++;
+    }
     if (!verify_sufficient_funds(player, min_bet_amt) && amount == this->players[player].stack) {
+        DEBUG_INFO("player " << player << " goes all in, makes side pot");
         double bet_amount = this->players[player].stack;
         this->players[player].stack = 0.0;
         this->players[player].total_bet += bet_amount;
-        this->players[player].bets_per_round[this->round].push_back(bet_amount);
+        this->players[player].bets_per_round[this->round][bet_idx] = bet_amount;
         this->pot += bet_amount;
         this->players[player].status = PlayerStatus::AllIn;
         reset_actions();
@@ -157,8 +176,9 @@ void PokerEngine::bet_or_raise(int player, double amount) {
     // Process the bet
     this->players[player].stack -= amount;
     this->players[player].total_bet += amount;
-    this->players[player].bets_per_round[this->round].push_back(amount);
+    this->players[player].bets_per_round[this->round][bet_idx] = amount;
     this->pot += amount;
+    DEBUG_INFO("player " << player << " successfully bet, new pot: " << this->pot);
 
     if (this->players[player].stack == 0) {
         this->players[player].status = PlayerStatus::AllIn;
@@ -176,8 +196,15 @@ void PokerEngine::check_or_call(int player) {
     if (player != this->actor) {
         throw std::runtime_error("Player mismatch: checking/calling player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));
     }
+
+    DEBUG_INFO("player " << player << " checking or calling");
+
     double min_bet_amt = calc_min_bet_amt(player);
     double call_amt = min_bet_amt - this->players[player].total_bet;
+    int bet_idx = 0;
+    for (int b=0; b<MAX_ROUND_BETS; ++b) {
+        if (this->players[player].bets_per_round[this->round][b] >= 0) bet_idx++;
+    }
 
     // Handle all-in if the player can't cover the call amount
     if (call_amt > this->players[player].stack) {
@@ -185,14 +212,15 @@ void PokerEngine::check_or_call(int player) {
         this->players[player].status = PlayerStatus::AllIn;
     }
 
+    DEBUG_INFO("player " << player << " calls " << call_amt); 
     if (call_amt > 0.0) {
         this->players[player].stack -= call_amt;
         this->players[player].total_bet += call_amt;
-        this->players[player].bets_per_round[this->round].push_back(call_amt);
+        this->players[player].bets_per_round[this->round][bet_idx] = call_amt;
         this->pot += call_amt;
     } else {
         // Player checks; record zero bet
-        this->players[player].bets_per_round[this->round].push_back(0.0);
+        this->players[player].bets_per_round[this->round][bet_idx] = 0.0;
     }
     
     this->players[player].acted = true;
@@ -251,7 +279,7 @@ void PokerEngine::deal_cards() {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
                 uint8_t card = this->deck[idx];
-                this->board.push_back(card);
+                this->board[i] = card;
                 this->deck.erase(this->deck.begin() + idx);
             }
             break;
@@ -260,7 +288,7 @@ void PokerEngine::deal_cards() {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
                 uint8_t card = this->deck[idx];
-                this->board.push_back(card);
+                this->board[3] = card;
                 this->deck.erase(this->deck.begin() + idx);
             }
         case 2: // River
@@ -268,7 +296,7 @@ void PokerEngine::deal_cards() {
                 std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
                 int idx = dist(rng);
                 uint8_t card = this->deck[idx];
-                this->board.push_back(card);
+                this->board[4] = card;
                 this->deck.erase(this->deck.begin() + idx);
             }
             break;
@@ -337,6 +365,11 @@ void PokerEngine::next_state() {
         //DEBUG_WARNING("Only 1 live player remaining, ending game");
         // All players are folded or all-in
         this->payoffs[live_player] = this->pot;
+        for (size_t i=0; i<this->n_players; ++i) {
+            if (i != live_player) {
+                this->payoffs[i] = -this->players[i].total_bet;
+            }
+        }
         this->players[live_player].stack += this->pot;
         this->game_status = false;
         return;
@@ -397,34 +430,45 @@ void PokerEngine::showdown() {
 
     DEBUG_INFO("Begin dealing remaining cards at showdown");
     // deal remaining cards at showdown
-    if (this->board.size() < 5) {
+    if (this->round < 3) {
         std::mt19937 rng(std::random_device{}());
-        while (this->board.size() < 5) {
-            std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
-            int idx = dist(rng);
-            uint8_t card = this->deck[idx];
-            this->board.push_back(card);
-            this->deck.erase(this->deck.begin() + idx);
+        for (size_t i=0; i<5; ++i) {
+            if (this->board[i] == 69) {
+                std::uniform_int_distribution<> dist(0, this->deck.size() - 1);
+                int idx = dist(rng);
+                uint8_t card = this->deck[idx];
+                this->board[i] = card;
+                this->deck.erase(this->deck.begin() + idx);
+            }
         }
     }
 
-    DEBUG_INFO("Board size after dealing: " << this->board.size());
-
+    omp::Hand board = omp::Hand::empty();
+    for (size_t j=0; j < 5; ++j) {
+        int board_card = this->board[j];
+        DEBUG_INFO("adding board card " << board_card);
+        board += omp::Hand(board_card);
+    }
     // populate player hand strengths
     std::vector<std::tuple<int, int>> hand_strengths;
     omp::HandEvaluator evaluator;
     for (size_t i=0; i < this->n_players; ++i) {
-        if (this->players[i].status == PlayerStatus::Playing || this->players[i].status == PlayerStatus::AllIn) {
+        if (this->players[i].status == PlayerStatus::Playing 
+         || this->players[i].status == PlayerStatus::AllIn) {
             omp::Hand hand = omp::Hand::empty();
             // add hole cards 
+            int card1 = this->players[i].hand[0];
+            int card2 = this->players[i].hand[1];
             hand += omp::Hand(this->players[i].hand[0]);
             hand += omp::Hand(this->players[i].hand[1]);
+
+            DEBUG_INFO("player " << i << " hole cards: " << card1 << "," << card2);
             // add board card 
-            for (size_t j=0; j < this->board.size(); ++j) {
-                hand += omp::Hand(this->board[j]);
-            }
+            hand += board;
+            
             // eval strength
             int hand_strength = evaluator.evaluate(hand);
+            DEBUG_INFO("evaled at strength " << hand_strength);
             // add to vec
             hand_strengths.push_back({i, hand_strength});
         }
@@ -467,9 +511,10 @@ void PokerEngine::showdown() {
         pot_winners.push_back(winner);
         int next = winner + 1;
         while (next < hand_strengths.size() && 
-            std::get<1>(hand_strengths[++next]) == std::get<1>(hand_strengths[0])) {
+            std::get<1>(hand_strengths[next]) == std::get<1>(hand_strengths[0])) {
             int player = std::get<0>(hand_strengths[next]);
             pot_winners.push_back(player); 
+            next++;
         } 
     }
 
@@ -494,16 +539,25 @@ void PokerEngine::showdown() {
         this->pot -= payoff;
         this->players[player].stack += payoff;
     }
+
     DEBUG_WARNING("Side pot calculated. Maint pot: " << this->pot);
         
     // split remaining pot evenly between pot_winners
     double split_pot = this->pot / static_cast<double>(pot_winners.size());
     for (size_t i=0; i<pot_winners.size(); ++i) {
-        int player = pot_winners[i];
-        this->payoffs[player] = split_pot;
-        this->players[player].stack += split_pot;
+        int main_winner = pot_winners[i];
+        DEBUG_INFO("main pot winner: " << main_winner);
+        this->payoffs[main_winner] = split_pot;
+        this->players[main_winner].stack += split_pot;
     }
+
     DEBUG_WARNING("Main pot shared by" << pot_winners.size() << " players. Each gets: " << split_pot);
+
+    for (size_t i=0; i<this->n_players; ++i) {
+        if (this->payoffs[i] == 0.0) {
+            this->payoffs[i] = -this->players[i].total_bet;
+        }
+    }
 
     this->game_status = false;
     DEBUG_INFO("Game status set to false");
@@ -515,9 +569,13 @@ void PokerEngine::showdown() {
 bool PokerEngine::should_force_check_or_call() const {
     DEBUG_INFO("Checking if should force check or call for Player " << (actor + 1));
     DEBUG_INFO("Current round: " << this->round << ", Max round bets: " << MAX_ROUND_BETS);
+    int num_bets = 0;
+    for (int b=0; b<MAX_ROUND_BETS; ++b) {
+        if (this->players[actor].bets_per_round[this->round][b] >= 0) num_bets++;
+    }
     DEBUG_INFO("Player's bets this round: " << this->players[actor].bets_per_round[this->round].size());
     int actor = this->actor;
-    if (this->players[actor].bets_per_round[this->round].size() == MAX_ROUND_BETS - 1) {
+    if (num_bets == MAX_ROUND_BETS - 1) {
         return true;
     }     
     return false;
@@ -529,7 +587,7 @@ bool PokerEngine::should_force_check_or_call() const {
 std::array<int, 5> PokerEngine::get_board() const {
     std::array<int, 5> ret;
     for (size_t i = 0; i < 5; ++i) {
-        if (i < this->board.size()) {
+        if (this->board[i] != 69) {
             ret[i] = this->board[i];
         } else {
             ret[i] = -1;
@@ -538,7 +596,7 @@ std::array<int, 5> PokerEngine::get_board() const {
     return ret;
 }
 
-std::pair<std::array<bool, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>, std::array<double, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND_BETS>> PokerEngine::construct_history() const {
+std::pair<std::array<bool, MAX_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, MAX_PLAYERS * 4 * MAX_ROUND_BETS>> PokerEngine::construct_history() const {
     constexpr int total_bets = 4 * MAX_PLAYERS * MAX_ROUND_BETS;
 
     std::array<bool, total_bets> bet_status{};
@@ -554,11 +612,16 @@ std::pair<std::array<bool, PokerEngine::MAX_PLAYERS * 4 * PokerEngine::MAX_ROUND
             uint p = b % this->n_players; 
             uint n_bet = static_cast<uint>(std::floor(static_cast<double>(b) / this->n_players));
 
-            if (this->players[p].bets_per_round[0].size() == 0) {
+            int num_bets = 0;
+            for (int b=0; b<MAX_ROUND_BETS; ++b) {
+                if (this->players[p].bets_per_round[r][b] >= 0) num_bets++;
+            }
+
+            if (num_bets == 0) {
                 continue;
             }
 
-            if (n_bet < this->players[p].bets_per_round[r].size()) {
+            if (n_bet < num_bets) {
                 double bet_amount = this->players[p].bets_per_round[r][n_bet]; 
 
                 bet_status[b] = (bet_amount > 0.0) ? 1 : 0;
@@ -596,26 +659,24 @@ void PokerEngine::manual_deal_board(const std::array<int, 5> board_cards) {
     }
 
     // Assign the new board cards
-    for (int card : board_cards) {
-        if (card >= 0) {
-            this->board.push_back(card);
-        }
+    for (size_t i=0; i<5; ++i) {
+        if (board_cards[i] >= 0) {
+            this->board[i] = board_cards[i];
+        }     
     }
 
     // Optionally, update the round if the board is fully dealt
-    if (this->board.size() == 3 && this->round == 0) { // Flop
+    if (this->board[2] != 69 && this->round == 0) { // Flop
         this->round = 1;
-    } else if (this->board.size() == 4 && this->round == 1) { // Turn
+    } else if (this->board[3] != 69 && this->round == 1) { // Turn
         this->round = 2;
-    } else if (this->board.size() == 5 && this->round == 2) { // River
+    } else if (this->board[4] != 69 && this->round == 2) { // River
         this->round = 3;
-    } else if (this->board.size() > 5) {
-        throw std::runtime_error("Board cannot have more than 5 cards.");
-    }
+    } 
 }
 
 /* queries */
-std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_finishing_stacks() const {
+std::array<double, MAX_PLAYERS> PokerEngine::get_finishing_stacks() const {
     std::array<double, MAX_PLAYERS> stacks;
     for(int i = 0; i < n_players; ++i){
         stacks[i] = players[i].stack;
@@ -623,7 +684,7 @@ std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_finishing_stacks()
     return stacks;
 }
 
-std::array<double, PokerEngine::MAX_PLAYERS> PokerEngine::get_payoffs() const {
+std::array<double, MAX_PLAYERS> PokerEngine::get_payoffs() const {
     return this->payoffs;
 }
 

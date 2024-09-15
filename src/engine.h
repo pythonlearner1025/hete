@@ -6,20 +6,16 @@
 #include <cstdint>
 #include "omp/Hand.h"
 #include "omp/HandEvaluator.h"
+#include "constants.h"
 
 // minimal No Limit Texas Hold'em poker engine
 
 class PokerEngine {
 public:
-    // constants
-    static const int MAX_PLAYERS = 2;
-    static const int BOARD_SIZE = 5;
-    static const int MAX_ROUND_BETS = 4;
-
     // constructor
     PokerEngine(
-        std::vector<double> starting_stacks,
-        std::vector<double> antes,
+        std::array<double, NUM_PLAYERS> starting_stacks,
+        std::array<double, NUM_PLAYERS> antes,
         int actor,
         int n_players, 
         double small_blind, 
@@ -35,7 +31,7 @@ public:
     int turn() const;
     double get_big_blind() const;
     bool is_playing(int player) const;
-    std::array<double, PokerEngine::MAX_PLAYERS> get_finishing_stacks() const;
+    std::array<double, MAX_PLAYERS> get_finishing_stacks() const;
     double get_pot() const;
 
     // action verification functions
@@ -73,7 +69,7 @@ public:
         double total_bet = 0.0; // total bet across all rounds
         bool acted = false;
         PlayerStatus status;
-        std::array<std::vector<double>, 4> bets_per_round; // 4 betting rounds
+        std::array<std::array<double, MAX_ROUND_BETS>, 4> bets_per_round; // 4 betting rounds
     };
 
     std::array<int, 5> get_board() const;
@@ -87,16 +83,12 @@ private:
     int round;
     int actor;
     int bet_idx;
-    int pot;
+    double pot;
     bool manual;
     bool game_status;
 
-    std::vector<int> bet_status;
-    std::vector<double> bet_history_raw;
-    std::vector<double> bet_history_frac;
     std::array<double, MAX_PLAYERS> payoffs;
-    std::vector<bool> status;
-    std::vector<uint8_t> board; // In the class definition
+    std::array<uint8_t, 5> board; 
     std::vector<uint8_t> deck;
 
     // Game flow

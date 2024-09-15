@@ -1,1 +1,1 @@
-int main();
+#include "constants.h"

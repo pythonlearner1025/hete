@@ -13,7 +13,7 @@
 
 // Set the current debug level
 #ifndef DEBUG_LEVEL
-#define DEBUG_LEVEL 2
+#define DEBUG_LEVEL DEBUG_LEVEL_NONE
 #endif
 
 // Base debug macro using variadic arguments
@@ -24,20 +24,26 @@
         std::cout << __VA_ARGS__ << std::endl; \
     } while (0)
 
+#if DEBUG_LEVEL == 0
+    #define DEBUG_NONE(...) DEBUG_PRINT("LOG", __VA_ARGS__)
+#else
+    #define DEBUG_NONE(...)    do { } while (0)
+#endif
+
 // Specific macros for each debug level with compile-time removal
-#if DEBUG_LEVEL <= DEBUG_LEVEL_INFO
+#if DEBUG_LEVEL != 0 && DEBUG_LEVEL <= DEBUG_LEVEL_INFO 
     #define DEBUG_INFO(...)    DEBUG_PRINT("INFO", __VA_ARGS__)
 #else
     #define DEBUG_INFO(...)    do { } while (0)
 #endif
 
-#if DEBUG_LEVEL <= DEBUG_LEVEL_WARNING
+#if DEBUG_LEVEL != 0 && DEBUG_LEVEL <= DEBUG_LEVEL_WARNING
     #define DEBUG_WARNING(...) DEBUG_PRINT("WARNING", __VA_ARGS__)
 #else
     #define DEBUG_WARNING(...) do { } while (0)
 #endif
 
-#if DEBUG_LEVEL <= DEBUG_LEVEL_ERROR
+#if DEBUG_LEVEL != 0 && DEBUG_LEVEL <= DEBUG_LEVEL_ERROR
     #define DEBUG_ERROR(...)   DEBUG_PRINT("ERROR", __VA_ARGS__)
 #else
     #define DEBUG_ERROR(...)   do { } while (0)

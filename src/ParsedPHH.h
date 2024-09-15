@@ -4,14 +4,15 @@
 
 #include <vector>
 #include <string>
+#include "constants.h"
 
 struct ParsedPHH {
-    std::vector<double> starting_stacks;
-    std::vector<double> finishing_stacks;
+    std::array<double, PHH_NUM_PLAYERS> starting_stacks;
+    std::array<double, PHH_NUM_PLAYERS> finishing_stacks;
     int n_players;
     double small_bet;
     double big_bet;
-    std::vector<double> antes;
+    std::array<double, PHH_NUM_PLAYERS> antes;
     std::vector<std::string> actions;
 };
 

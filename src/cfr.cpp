@@ -14,10 +14,6 @@
 #include <iomanip> // For std::put_time
 #include <sstream> // For std::stringstream
 
-// for debugging
-std::atomic<int> total_traversals(0);
-std::atomic<int> total_advantages(0);
-
 // Helper function for getting current timestamp
 std::string get_timestamp() {
     auto now = std::chrono::system_clock::now();
@@ -70,7 +66,6 @@ void get_cards(PokerEngine& game, int player, Infoset& I) {
     }
 }
 
-// Prepare the information set for the neural network input
 Infoset prepare_infoset(
     PokerEngine& game,
     int player,
@@ -78,23 +73,20 @@ Infoset prepare_infoset(
 ) {
     Infoset I;
     auto history = game.construct_history();
-    // Convert history to tensors
     get_cards(game, player, I);
-    // Assuming history.first is bet_status and history.second is bet_fracs
-    std::vector<double> bet_fracs_vec(history.second.begin(), history.second.end());
-    std::vector<float> bet_fracs_float(bet_fracs_vec.begin(), bet_fracs_vec.end());
-    I.bet_fracs = torch::tensor(bet_fracs_float, torch::kFloat32).view({1, static_cast<long long>(bet_fracs_vec.size())});
 
-    std::vector<int> bet_status_vec;
-    for(auto status : history.first) {
-        bet_status_vec.push_back(status ? 1 : 0);
-    }
-    std::vector<float> bet_status_float(bet_status_vec.begin(), bet_status_vec.end());
-    I.bet_status = torch::tensor(bet_status_float, torch::kFloat32).view({1, static_cast<long long>(bet_status_float.size())});
+    // Convert bet_fracs array to tensor
+    I.bet_fracs = torch::from_blob(history.second.data(), 
+                                   {1, static_cast<long long>(history.second.size())}, 
+                                   torch::kFloat32);
+
+    // Convert bet_status array to tensor
+    I.bet_status = torch::from_blob(history.first.data(), 
+                                    {1, static_cast<long long>(history.first.size())}, 
+                                    torch::kBool).to(torch::kFloat32);
 
     return I;
 }
-
 
 // must return a prob dist
 std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts) {
@@ -122,12 +114,16 @@ std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_
 int sample_action(const std::array<double, MAX_ACTIONS>& strat, int n_acts) {
     double r = static_cast<double>(rand()) / RAND_MAX;
     double cumulative = 0.0;
+    DEBUG_INFO("r is " << r);
     for (int i = 0; i < n_acts; ++i) {
+        DEBUG_INFO("strat " << i << " has p=" << strat[i]);
         cumulative += strat[i];
         if (r <= cumulative) {
+            DEBUG_INFO("returning " << i);
             return i;
         }
     }
+    DEBUG_INFO("returning " << (n_acts - 1));
     return n_acts - 1; // Return last valid action if none selected
 }
 
@@ -159,7 +155,7 @@ bool verify_action(PokerEngine& engine, int player, int act, int n_acts) {
     if (act == 1) {
         return engine.can_check_or_call(player); 
     }
-    double inc = 1.0 / static_cast<double>(n_acts);
+    double inc = engine.get_pot() * 1.0 / static_cast<double>(n_acts);
     double bet_amt = inc;
     for (int a = 2; a < n_acts; ++a) {
         if (a == act) {
@@ -174,23 +170,26 @@ bool verify_action(PokerEngine& engine, int player, int act, int n_acts) {
 double traverse(
     PokerEngine& engine, 
     int player,
-    std::vector<std::vector<void*>>& nets,
+    std::array<std::array<void*, CFR_ITERS>, NUM_PLAYERS>& nets,
     int t,
-    std::vector<TraverseAdvantage>& traverse_advs,
+    std::array<TraverseAdvantage, MAX_ADVS>& all_traverse_advs,
+    std::atomic<size_t>& all_traverse_advs_index,
     std::mutex& advs_mutex
 ) {
     DEBUG_INFO(get_timestamp() << " Entering traverse()");
     DEBUG_INFO(get_timestamp() << " Game status: " << engine.get_game_status() << ", Is player playing: " << engine.is_playing(player));
 
-    total_traversals++;
     // Check if game is done for this player
     if (!engine.get_game_status() || !engine.is_playing(player)) {
         DEBUG_INFO(get_timestamp() << " Game over");
-        std::array<double, PokerEngine::MAX_PLAYERS> payoff = engine.get_payoffs();
-        for (size_t i=0; i<nets.size(); ++i) {
+        std::array<double, MAX_PLAYERS> payoff = engine.get_payoffs();
+
+        /*
+        for (size_t i=0; i<NUM_PLAYERS; ++i) {
             DEBUG_INFO("player " << i << " payoff: " << payoff[i]);
         }
         DEBUG_INFO(""); // For additional newline
+        */
 
         double bb = engine.get_big_blind();
         return payoff[player] / bb;
@@ -198,9 +197,9 @@ double traverse(
     else if (engine.turn() == player) {
         DEBUG_INFO(get_timestamp() << " My turn");
 
-        void* net_ptr = nets[player][nets[player].size()-1];
+        void* net_ptr = nets[player][CFR_ITERS-1];
 
-        Infoset I = prepare_infoset(engine, player, PokerEngine::MAX_ROUND_BETS);
+        Infoset I = prepare_infoset(engine, player, MAX_ROUND_BETS);
 
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
 
@@ -242,7 +241,8 @@ double traverse(
                 player, 
                 nets, 
                 t, 
-                traverse_advs,
+                all_traverse_advs,
+                all_traverse_advs_index,
                 advs_mutex
             );
             DEBUG_INFO("value: " << value << " strat %: " << strat[a]);
@@ -269,10 +269,14 @@ double traverse(
         ta.iteration = t;
         ta.advantages = advs;
 
-        {
+        // When adding an advantage:
+        size_t index = all_traverse_advs_index.fetch_add(1);
+        if (index < MAX_ADVS) {
             std::lock_guard<std::mutex> lock(advs_mutex);
-            DEBUG_INFO(get_timestamp() << "ev: " << ev);
-            traverse_advs.emplace_back(ta);
+            all_traverse_advs[index] = TraverseAdvantage{I, t, advs};
+        } else {
+            // Handle the case where we've exceeded MAX_ADVS
+            DEBUG_INFO("Warning: Exceeded MAX_ADVS");
         }
 
         // Return expected value
@@ -283,10 +287,10 @@ double traverse(
         DEBUG_INFO(get_timestamp() << " Opponent's turn");
         // Opponent's turn
         int actor = engine.turn();
-        void* net_ptr = nets[actor][nets[actor].size()-1];
+        void* net_ptr = nets[actor][CFR_ITERS-1];
         int n_acts = get_action_head_dim(net_ptr);
         // Prepare infoset
-        Infoset I = prepare_infoset(engine, actor, PokerEngine::MAX_ROUND_BETS);
+        Infoset I = prepare_infoset(engine, actor, MAX_ROUND_BETS);
         // Forward pass
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
         // Regret matching
@@ -297,7 +301,7 @@ double traverse(
 
         // Verify and adjust action if necessary
         while (!verify_action(engine, player, action_index, n_acts)) {
-            action_index = (action_index + 1) % n_acts;
+            action_index = (action_index - 1) % n_acts;
         }
         // Take action
         take_action(engine, actor, action_index, n_acts);
@@ -310,7 +314,8 @@ double traverse(
             player,
             nets,
             t,
-            traverse_advs,
+            all_traverse_advs,
+            all_traverse_advs_index,
             advs_mutex
         );
     }
@@ -318,35 +323,38 @@ double traverse(
 
 // Function to run multiple traversals in parallel
 // TODO - why is pot always no greater than big blind?
-int main() {
-    int num_traversals = 100000;
+int main(){
     int player = 0;
-    int n_players = 2;
     double small_bet = 0.5;
     double big_bet = 1;
-    std::vector<double> antes = {0.0, 0.0};
-    void* init_model = create_deep_cfr_model(n_players, PokerEngine::MAX_ROUND_BETS, MAX_ACTIONS);
-    std::vector<std::vector<void*>> nets = {{init_model}, {init_model}};
+    DEBUG_NONE("hello");
+    std::array<double, NUM_PLAYERS> antes = {0.0, 0.0};
+    std::array<double, NUM_PLAYERS> starting_stacks = {100.0, 100.0};
+    DEBUG_NONE("init antes & satcks");
+    void* init_model = create_deep_cfr_model(NUM_PLAYERS, MAX_ROUND_BETS, MAX_ACTIONS);
+    DEBUG_NONE("init model");
     int t = 0;
-    std::vector<TraverseAdvantage> all_traverse_advs;
+    std::array<std::array<void*, CFR_ITERS>, NUM_PLAYERS> nets;
+    for (size_t i = 0; i<NUM_PLAYERS; ++i) {
+        for (size_t j = 0; j <CFR_ITERS; ++j){
+            nets[i][j] = init_model;
+        }
+    }
+    DEBUG_NONE("init nets");
+    std::array<TraverseAdvantage, MAX_ADVS> all_traverse_advs;
+    DEBUG_NONE("init all advs");
+    std::atomic<size_t> all_traverse_advs_index(0);
     std::mutex advs_mutex;
+
     // Determine the number of available hardware threads
     unsigned int num_threads = std::thread::hardware_concurrency();
     if (num_threads == 0) num_threads = 4; // Fallback to 4 if unable to detect
-    //num_threads = 1;
 
-    DEBUG_INFO("Total threads: " << num_threads);
+    DEBUG_NONE("Total threads: " << num_threads);
 
-    // Function for each thread to execute
     auto thread_func = [&](int traversals_per_thread, int thread_id) {
-        DEBUG_INFO(get_timestamp() << " Thread " << thread_id << " starting with " << traversals_per_thread << " traversals");
-        int local_traversals = 0;
-        int local_advantages = 0;
-
         for(int k = 0; k < traversals_per_thread; ++k) {
             // Extract parameters
-            std::vector<double> starting_stacks = {100.0, 100.0};
-
             int starting_actor = 0;
 
             // Initialize PokerEngine
@@ -354,39 +362,27 @@ int main() {
                 starting_stacks, 
                 antes,
                 starting_actor,
-                n_players, 
+                NUM_PLAYERS, 
                 small_bet, 
                 big_bet, 
                 false
-            ); // Assuming max_round_bets = 4 and manual_mode = true
-
-            std::vector<TraverseAdvantage> local_traverse_advs;
+            );
 
             try {
-                traverse(engine, player, nets, t, local_traverse_advs, advs_mutex);
-                local_traversals++;
-                local_advantages += local_traverse_advs.size();
+                traverse(engine, player, nets, t, all_traverse_advs, all_traverse_advs_index, advs_mutex);
             }
             catch(const std::exception& e) {
-                // Handle exceptions (e.g., log and continue)
                 DEBUG_INFO(e.what());
                 continue;
             }
-            // Add local_traverse_advs to the shared all_traverse_advs with synchronization
-            {
-                std::lock_guard<std::mutex> lock(advs_mutex);
-                DEBUG_INFO(get_timestamp() << " Thread " << thread_id << " adding " << local_traverse_advs.size() << " advantages");
-                all_traverse_advs.insert(all_traverse_advs.end(), local_traverse_advs.begin(), local_traverse_advs.end());
-            }
         }
-        total_advantages += local_advantages;
     };
 
     // Calculate traversals per thread
-    int traversals_per_thread = num_traversals / num_threads;
-    DEBUG_INFO("Traversals per thread: " << traversals_per_thread);
-    int remaining_traversals = num_traversals % num_threads;
-    DEBUG_INFO("Remaining traversals: " << remaining_traversals);
+    int traversals_per_thread = NUM_TRAVERSALS / num_threads;
+    DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
+    int remaining_traversals = NUM_TRAVERSALS % num_threads;
+    DEBUG_NONE("Remaining traversals: " << remaining_traversals);
 
     // Create threads
     auto start = std::chrono::high_resolution_clock::now();
@@ -408,13 +404,13 @@ int main() {
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
-    auto throughput = static_cast<double>(num_traversals) / duration.count();
+    size_t total_traversals = all_traverse_advs_index.fetch_add(1);
+    auto throughput = static_cast<float>(total_traversals) / duration.count();
 
-    DEBUG_INFO("All jobs done");
-    DEBUG_INFO(get_timestamp() << " Total traversals: " << total_traversals.load());
-    DEBUG_INFO(get_timestamp() << " Total advantages collected: " << total_advantages.load());
-    DEBUG_INFO(get_timestamp() << " Size of all_traverse_advs: " << all_traverse_advs.size());
-    DEBUG_INFO(get_timestamp() << " Throughput: " << throughput << " traversals/s");
+    DEBUG_NONE("All jobs done");
+    DEBUG_NONE(get_timestamp() << " Total traversals: " << total_traversals);
+    DEBUG_NONE(get_timestamp() << " Size of all_traverse_advs: " << all_traverse_advs.size());
+    DEBUG_NONE(get_timestamp() << " Throughput: " << throughput << " traversals/s");
 
     return 0;
 }
