@@ -332,6 +332,7 @@ void PokerEngine::next_state() {
     if (n_live_players == 1) {
         std::cout << "Only 1 live player remaining, ending game" << std::endl;
         // All players are folded or all-in
+        this->payoffs[live_player] = this->pot;
         this->players[live_player].stack += this->pot;
         this->game_status = false;
         return;

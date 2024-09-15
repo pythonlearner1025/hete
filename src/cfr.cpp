@@ -89,6 +89,8 @@ Infoset prepare_infoset(
     return I;
 }
 
+
+// must return a prob dist
 std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts) {
     auto relu_logits = torch::relu(logits);
     
@@ -98,7 +100,7 @@ std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_
     
     // If the sum is positive, calculate the strategy
     if (logits_sum > 0) {
-        auto strategy_tensor = relu_logits / (logits_sum - relu_logits);
+        auto strategy_tensor = relu_logits / logits_sum;
         std::copy(strategy_tensor.data_ptr<float>(), strategy_tensor.data_ptr<float>() + n_acts, strat.begin());
     } 
     // If the sum is zero or negative, return a one-hot vector for the max logit
@@ -179,6 +181,10 @@ double traverse(
     if (!engine.get_game_status() || !engine.is_playing(player)) {
         std::cout << get_timestamp() << " Game over" << std::endl;
         std::array<double, PokerEngine::MAX_PLAYERS> payoff = engine.get_payoffs();
+        for (size_t i=0; i<nets.size(); ++i) {
+            std::cout << "player " + std::to_string(i) + " payoff: " + std::to_string(payoff[i]) + "\n";
+        }
+        std::cout << std::endl;
         double bb = engine.get_big_blind();
         return payoff[player] / bb;
     }
@@ -205,12 +211,14 @@ double traverse(
 
         for (size_t a = 0; a < n_acts; ++a) {
 
-            std::cout << "modeling action: " + std::to_string(a) << std::endl;
             // Verify action
             // ensure game state doesn't change
             if (!verify_action(engine, player, a, n_acts)) {
                 is_illegal[a] = true;
+                std::cout << "action is illegal, skipping: " + std::to_string(a) << std::endl;
                 continue;
+            } else {
+                std::cout << "action is legal, modeling: " + std::to_string(a) << std::endl;
             }
 
             // Create a copy of the game state
@@ -230,7 +238,7 @@ double traverse(
                 traverse_advs,
                 advs_mutex
             );
-
+            std::cout << "value: " + std::to_string(value) + " strat %: " + std::to_string(strat[a]) << std::endl;
             values[a] = value;
             ev += value * strat[a];
         }

@@ -46,4 +46,6 @@ void run_traversals(
     std::mutex& advs_mutex
 );
 
+//std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts)
+
 #endif // CFR_H
