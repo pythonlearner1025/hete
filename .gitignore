@@ -5,6 +5,7 @@ exp/
 __pycache__/
 build/
 ompeval.cpython-312-darwin.so
+.vscode/
 
 # ignore 
 src/model/model
