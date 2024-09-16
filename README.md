@@ -1,6 +1,6 @@
 # haetae
 
-> The haetae is a mythical creature of Chinese origin that possesses the innate ability to determine right from wrong. Resembling a magnificent ox, it serves as a symbol of justice.
+> The haetae is a mythical creature of Chinese origin that possesses the innate ability to determine right from wrong. Resembling a magnificent, armored ox, it questioned officials to discern whether they were corrupt or not. If the official lied, he would be rammed by the haetae's great horns. 
 
 Performnant implementation of Deep-CFR for multiway poker. The library comes with a lightweight poker engine, a CFR implementation, and a 100,000 parameter neural network using libtorch. Lightning fast hand evaluations are performed using the fantasic OMPEval library.   
 
