@@ -1,4 +1,4 @@
-# haetae
+# haetae lore
 
 > The haetae is a mythical creature of Chinese origin that possesses the innate ability to determine right from wrong. Resembling a magnificent, armored ox, it questioned officials to discern whether they were corrupt or not. If the official lied, he would be rammed by the haetae's great horns. 
 
