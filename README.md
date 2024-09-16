@@ -15,15 +15,15 @@ TODO
 
 # libtorch integration
 
-install libtorch 
+install libtorch cpu only version from https://pytorch.org/
 
-install libomp add it to ~/.bashrc or ~/.zshrc: 
+update path in CMakeLists.txt
 
-```bash export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH```
+set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/path/to/libtorch")
 
 run 
 
-```bash cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch``` 
+```bash cmake```
 
 ```make``` 
 
