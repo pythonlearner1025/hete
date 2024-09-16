@@ -1,6 +1,8 @@
 [submodule "pokerkit"]
 	path = pokerkit
 	url = https://github.com/pythonlearner1025/pokerkit.git
+	branch = master
 [submodule "OMPEval"]
 	path = OMPEval
 	url = https://github.com/pythonlearner1025/OMPEval.git
+	branch = master
