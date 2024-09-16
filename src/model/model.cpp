@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <chrono>
 #include <cassert>
+#include "model.h"
 
 // ========================
 // CardEmbedding Module
@@ -101,9 +102,8 @@ struct DeepCFRModelImpl : torch::nn::Module {
         card3 = register_module("card3", torch::nn::Linear(dim, dim));
 
         // Initialize bet linear layers
-        int64_t nrounds = 4;
         // Calculate input size based on the formula: (n_bets * n_players * nrounds - nrounds) * 2
-        int64_t bet_input_size = (n_bets * n_players * nrounds) * 2;
+        int64_t bet_input_size = (n_bets * n_players * 4) * 2;
         //std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
         bet1 = register_module("bet1", torch::nn::Linear(bet_input_size, dim));
         bet2 = register_module("bet2", torch::nn::Linear(dim, dim));
@@ -129,6 +129,20 @@ struct DeepCFRModelImpl : torch::nn::Module {
             bet_status: torch::Tensor of shape [N, bet_input_size / 2]
         */
 
+        DEBUG_INFO("Entering DeepCFRModelImpl::forward");
+        // Add checks for tensor shapes and types
+        for (int i = 0; i < 4; ++i) {
+            if (!cards[i].defined()) {
+                throw std::runtime_error("Card tensor " + std::to_string(i) + " is not defined");
+            }
+            DEBUG_INFO("Card " << i << " shape: " << cards[i].sizes());
+        }
+        if (!bet_fracs.defined() || !bet_status.defined()) {
+            throw std::runtime_error("bet_fracs or bet_status is not defined");
+        }
+        DEBUG_INFO("bet_fracs shape: " << bet_fracs.sizes());
+        DEBUG_INFO("bet_status shape: " << bet_status.sizes());
+
         // 1. Card Branch
         std::vector<torch::Tensor> card_embs;
         int64_t n_card_types = card_embeddings->size();
@@ -136,28 +150,38 @@ struct DeepCFRModelImpl : torch::nn::Module {
             // Retrieve the i-th CardEmbedding module
             auto embedding_module = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(i));
             if (!embedding_module){
+                DEBUG_INFO("moduel != cardembeddingimpl");
                 throw std::runtime_error("Module is not of type CardEmbeddingImpl");
             }
             // Forward pass through CardEmbedding
             auto card_emb = embedding_module->forward(cards[i]); // [N, dim]
             card_embs.push_back(card_emb);
+            DEBUG_INFO("cardembed done");
         }
         // Concatenate embeddings from all card groups
         auto card_embs_cat = torch::cat(card_embs, /*dim=*/1); // [N, dim * n_card_types]
+        DEBUG_INFO("cardconcat");
         
         // Pass through card linear layers with ReLU activations
         auto x = torch::relu(card1->forward(card_embs_cat)); // [N, dim]
         x = torch::relu(card2->forward(x));                  // [N, dim]
         x = torch::relu(card3->forward(x));                  // [N, dim]
+        DEBUG_INFO("card forwqrds");
 
         // 2. Bet Branch
         auto bet_size = bet_fracs.clamp(/*min=*/0, /*max=*/1e6); // Clamp between 0 and 1e6
         auto bet_occurred = bet_status.to(torch::kFloat);        // [N, bet_input_size / 2]
         auto bet_feats = torch::cat({bet_size, bet_occurred}, /*dim=*/1); // [N, bet_input_size]
+        DEBUG_INFO("bet embed complete");
         
         // Pass through bet linear layers with ReLU and residual connection
+        // Inside the forward function, just before the Bet Branch
+        DEBUG_INFO("bet_feats shape: " << bet_feats.sizes());
+        DEBUG_INFO("bet1 weight shape: " << bet1->weight.sizes());
+        DEBUG_INFO("bet1 bias shape: " << bet1->bias.sizes());
         auto y = torch::relu(bet1->forward(bet_feats));           // [N, dim]
         y = torch::relu(bet2->forward(y) + y);                    // [N, dim]
+        DEBUG_INFO("bet12 complete");
 
         // 3. Combined Trunk
         auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 * dim]
@@ -168,6 +192,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, n_actions]
+        DEBUG_INFO("act head complete");
         //std::cout << "forward complete" << std::endl;
         return output;
     }
@@ -179,7 +204,7 @@ TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRMod
 // ========================
 
 // Factory functions
-void* create_deep_cfr_model(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim = 256) {
+void* create_deep_cfr_model(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim) {
     return new DeepCFRModel(n_players, n_bets, n_actions, dim);
 }
 

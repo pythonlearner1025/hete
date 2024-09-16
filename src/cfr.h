@@ -1,5 +1,3 @@
-// cfr.h
-
 #ifndef CFR_H
 #define CFR_H
 
@@ -29,23 +27,22 @@ struct TraverseAdvantage {
 double traverse(
     PokerEngine& engine, 
     int player,
-    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS> nets,
+    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS>& nets,
     int t,
-    int max_bets_per_player,
-    std::array<TraverseAdvantage, MAX_ADVS> all_traverse_advs,
+    std::vector<TraverseAdvantage>& all_traverse_advs,
+    std::atomic<size_t>& all_traverse_advs_index,
     std::mutex& advs_mutex
 );
 
 // Function to run multiple traversals in parallel
 void run_traversals(
     int player,
-    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS> nets,
+    std::array<std::array<void*, NUM_TRAVERSALS>, NUM_PLAYERS>& nets,
     int t,
     int max_bets_per_player,
-    std::array<TraverseAdvantage, MAX_ADVS> all_traverse_advs,
+    std::vector<TraverseAdvantage>& all_traverse_advs,
+    std::atomic<size_t>& all_traverse_advs_index,
     std::mutex& advs_mutex
 );
-
-//std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts)
 
 #endif // CFR_H

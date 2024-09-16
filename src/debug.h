@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <sstream>
+#include "constants.h"
 
 // Define debug levels
 #define DEBUG_LEVEL_NONE 0
@@ -11,10 +12,7 @@
 #define DEBUG_LEVEL_WARNING 2
 #define DEBUG_LEVEL_ERROR 3
 
-// Set the current debug level
-#ifndef DEBUG_LEVEL
-#define DEBUG_LEVEL DEBUG_LEVEL_NONE
-#endif
+
 
 // Base debug macro using variadic arguments
 // add back in __FILE__ << ":" << __LINE__ if needed

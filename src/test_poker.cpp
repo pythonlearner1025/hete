@@ -414,7 +414,6 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
             starting_stacks, 
             antes,
             starting_actor,
-            n_players, 
             small_bet, 
             big_bet, 
             true
@@ -467,7 +466,7 @@ bool test_poker(const ParsedPHH& phh, const std::string& file_name) {
         }
 
         // After processing actions, verify finishing stacks
-        std::array<double, MAX_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
+        std::array<double, NUM_PLAYERS> actual_finishing_stacks = engine.get_finishing_stacks();
 
         // Compare actual_finishing_stacks with phh.finishing_stacks
         for (int i = 0; i < n_players; ++i) {
