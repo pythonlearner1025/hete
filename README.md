@@ -1,4 +1,6 @@
-# Deep Poker
+# haetae
+
+> The haetae is a mythical creature of Chinese origin that possesses the innate ability to determine right from wrong. Resembling a magnificent ox, it serves as a symbol of justice.
 
 Performnant implementation of Deep-CFR for multiway poker. The library comes with a lightweight poker engine, a CFR implementation, and a 100,000 parameter neural network using libtorch. Lightning fast hand evaluations are performed using the fantasic OMPEval library.   
 
