@@ -35,6 +35,7 @@ public:
     double get_pot() const;
     std::array<int, 5> get_board() const;
     std::array<uint8_t, 52> get_deck() const;
+    double get_call_amount(int player) const;
 
     // action verification functions
     bool can_fold(int player) const;

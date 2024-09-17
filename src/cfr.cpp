@@ -27,97 +27,12 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
-void get_cards(PokerEngine& game, int player, Infoset& I) {
-    std::array<int, 5> board = game.get_board();
-    int board_size = 0;
-    for (size_t i = 0; i < 5; ++i) {
-        if (board[i] != -1) board_size++;
-    }
-
-    DEBUG_INFO("Player hand: " << game.players[player].hand[0] << ", " << game.players[player].hand[1]);
-
-    I.cards[0] = torch::tensor({static_cast<int64_t>(game.players[player].hand[0]), 
-                                static_cast<int64_t>(game.players[player].hand[1])}).view({1, 2});
-
-    DEBUG_INFO("Board size: " << board_size);
-
-    if (board_size >= 3) {
-        DEBUG_INFO("Flop: " << board[0] << ", " << board[1] << ", " << board[2]);
-        I.cards[1] = torch::tensor({static_cast<int64_t>(board[0]), 
-                                    static_cast<int64_t>(board[1]), 
-                                    static_cast<int64_t>(board[2])}).view({1, 3});
-    } else {
-        I.cards[1] = torch::tensor({-1, -1, -1}).view({1, 3});
-    }
-
-    if (board_size >= 4) {
-        DEBUG_INFO("Turn: " << board[3]);
-        I.cards[2] = torch::tensor({static_cast<int64_t>(board[3])}).view({1, 1});
-    } else {
-        I.cards[2] = torch::tensor({-1}).view({1, 1});
-    }
-
-    if (board_size >= 5) {
-        DEBUG_INFO("River: " << board[4]);
-        I.cards[3] = torch::tensor({static_cast<int64_t>(board[4])}).view({1, 1});
-    } else {
-        I.cards[3] = torch::tensor({-1}).view({1, 1});
-    }
-}
-
-Infoset prepare_infoset(
-    PokerEngine& game,
-    int player,
-    int max_bets_per_player
-) {
-    Infoset I;
-    auto history = game.construct_history();
-    get_cards(game, player, I);
-
-    // Convert bet_fracs array to tensor
-    I.bet_fracs = torch::from_blob(history.second.data(), 
-                                   {1, static_cast<long long>(history.second.size())}, 
-                                   torch::kFloat32);
-
-    // Convert bet_status array to tensor
-    I.bet_status = torch::from_blob(history.first.data(), 
-                                    {1, static_cast<long long>(history.first.size())}, 
-                                    torch::kBool).to(torch::kFloat32);
-
-    return I;
-}
-
-// Must return a probability distribution
-std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts) {
-    auto relu_logits = torch::relu(logits);
-    
-    double logits_sum = relu_logits.sum().item<double>();
-    
-    std::array<double, MAX_ACTIONS> strat{};
-    
-    // If the sum is positive, calculate the strategy
-    if (logits_sum > 0) {
-        auto strategy_tensor = relu_logits / logits_sum;
-        auto strat_data = strategy_tensor.data_ptr<float>();
-        for (int i = 0; i < n_acts; ++i) {
-            strat[i] = strat_data[i];
-        }
-    } 
-    // If the sum is zero or negative, return a one-hot vector for the max logit
-    else {
-        auto max_index = torch::argmax(relu_logits).item<int>();
-        std::fill(strat.begin(), strat.end(), 0.0);
-        strat[max_index] = 1.0;
-    }
-    return strat;
-}
-
 // Sample an action according to the strategy probabilities
-int sample_action(const std::array<double, MAX_ACTIONS>& strat, int n_acts) {
+int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
     double r = static_cast<double>(rand()) / RAND_MAX;
     double cumulative = 0.0;
     DEBUG_INFO("r is " << r);
-    for (int i = 0; i < n_acts; ++i) {
+    for (int i = 0; i < NUM_ACTIONS; ++i) {
         DEBUG_INFO("strat " << i << " has p=" << strat[i]);
         cumulative += strat[i];
         if (r <= cumulative) {
@@ -125,11 +40,11 @@ int sample_action(const std::array<double, MAX_ACTIONS>& strat, int n_acts) {
             return i;
         }
     }
-    DEBUG_INFO("returning " << (n_acts - 1));
-    return n_acts - 1; // Return last valid action if none selected
+    DEBUG_INFO("returning " << (NUM_ACTIONS - 1));
+    return NUM_ACTIONS - 1; // Return last valid action if none selected
 }
 
-void take_action(PokerEngine& engine, int player, int act, int n_acts) {
+void take_action(PokerEngine& engine, int player, int act) {
     DEBUG_INFO("Chosen act: " << act);
     if (act == 0) {
         engine.fold(player);
@@ -139,9 +54,9 @@ void take_action(PokerEngine& engine, int player, int act, int n_acts) {
         engine.check_or_call(player); 
         return;
     }
-    double inc = engine.get_pot() * 1.0 / static_cast<double>(n_acts);
+    double inc = engine.get_pot() * 1.0 / static_cast<double>(NUM_ACTIONS);
     double bet_amt = inc;
-    for (int a = 2; a < n_acts; ++a) {
+    for (int a = 2; a < NUM_ACTIONS; ++a) {
         if (a == act) {
             engine.bet_or_raise(player, bet_amt);
             return;
@@ -150,16 +65,16 @@ void take_action(PokerEngine& engine, int player, int act, int n_acts) {
     }
 }
 
-bool verify_action(PokerEngine& engine, int player, int act, int n_acts) {
+bool verify_action(PokerEngine& engine, int player, int act) {
     if (act == 0) {
         return engine.can_fold(player);
     }
     if (act == 1) {
         return engine.can_check_or_call(player); 
     }
-    double inc = engine.get_pot() * 1.0 / static_cast<double>(n_acts);
+    double inc = engine.get_pot() * 1.0 / static_cast<double>(NUM_ACTIONS);
     double bet_amt = inc;
-    for (int a = 2; a < n_acts; ++a) {
+    for (int a = 2; a < NUM_ACTIONS; ++a) {
         if (a == act) {
             return engine.can_bet_or_raise(player, bet_amt);
         }
@@ -205,21 +120,20 @@ double traverse(
 
         DEBUG_INFO(get_timestamp() << " Neural network logits: " << logits);
 
-        int n_acts = get_action_head_dim(net_ptr);
         // Regret matching
-        std::array<double, MAX_ACTIONS> strat = regret_match(logits, n_acts);
+        std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
         // Define possible actions
-        std::array<double, MAX_ACTIONS> values{};  // Initialize all elements to 0.0
-        std::array<double, MAX_ACTIONS> advs{};    // Initialize all elements to 0.0
-        std::array<bool, MAX_ACTIONS> is_illegal{};  // Initialize all elements to false
+        std::array<double, NUM_ACTIONS> values{};  // Initialize all elements to 0.0
+        std::array<double, NUM_ACTIONS> advs{};    // Initialize all elements to 0.0
+        std::array<bool, NUM_ACTIONS> is_illegal{};  // Initialize all elements to false
         double ev = 0.0;
 
-        for (size_t a = 0; a < n_acts; ++a) {
+        for (size_t a = 0; a < NUM_ACTIONS; ++a) {
 
             // Verify action
             // ensure game state doesn't change
-            if (!verify_action(engine, player, a, n_acts)) {
+            if (!verify_action(engine, player, a)) {
                 is_illegal[a] = true;
                 DEBUG_INFO("action is illegal, skipping: " << a);
                 continue;
@@ -233,7 +147,7 @@ double traverse(
             is_illegal[a] = false;
 
             // Take action
-            take_action(new_engine, player, a, n_acts);
+            take_action(new_engine, player, a);
 
             // Recursive call to traverse
             double value = traverse(
@@ -251,10 +165,10 @@ double traverse(
         }
 
         DEBUG_INFO(get_timestamp() << " Calculated advantages: ");
-        for (size_t a = 0; a < n_acts; ++a) {
+        for (size_t a = 0; a < NUM_ACTIONS; ++a) {
             if (!is_illegal[a]) {
                 double adv = values[a] - ev;
-                advs[a] = (adv > 0.0) ? adv : (1.0 / static_cast<double>(n_acts));
+                advs[a] = (adv > 0.0) ? adv : (1.0 / static_cast<double>(NUM_ACTIONS));
             } else {
                 advs[a] = 0.0;
             }
@@ -281,23 +195,22 @@ double traverse(
         // Opponent's turn
         int actor = engine.turn();
         void* net_ptr = nets[actor][CFR_ITERS-1];
-        int n_acts = get_action_head_dim(net_ptr);
         // Prepare infoset
-        Infoset I = prepare_infoset(engine, actor, MAX_ROUND_BETS);
+        Infoset I = prepare_infoset(engine, actor);
         // Forward pass
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
         // Regret matching
-        std::array<double, MAX_ACTIONS> strat = regret_match(logits, n_acts);
+        std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
         // Sample action according to strat
-        int action_index = sample_action(strat, n_acts);
+        int action_index = sample_action(strat);
 
         // Verify and adjust action if necessary
-        while (!verify_action(engine, actor, action_index, n_acts)) {
-            action_index = (action_index - 1) % n_acts;
+        while (!verify_action(engine, actor, action_index)) {
+            action_index = (action_index - 1) % NUM_ACTIONS;
         }
         // Take action
-        take_action(engine, actor, action_index, n_acts);
+        take_action(engine, actor, action_index);
 
         DEBUG_INFO(get_timestamp() << " Opponent's turn. Selected action: " << action_index);
 
@@ -315,7 +228,7 @@ double traverse(
 }
 
 // Function to run multiple traversals in parallel
-int main(){
+int y(){
     int player = 0;
     double small_bet = 0.5;
     double big_bet = 1;
@@ -333,7 +246,7 @@ int main(){
     if (num_threads == 0) num_threads = 4; // Fallback to 4 if unable to detect
     DEBUG_NONE("NUM_PLAYERS = " << NUM_PLAYERS);
     DEBUG_NONE("TRAVERSALS = " << NUM_TRAVERSALS);
-    DEBUG_NONE("MAX_ACTIONS = " << MAX_ACTIONS);
+    DEBUG_NONE("NUM_ACTIONS = " << NUM_ACTIONS);
     DEBUG_NONE("MAX_ROUND_BETS = " << MAX_ROUND_BETS);
     DEBUG_NONE("NUM_THREADS = " << num_threads);
 
@@ -341,7 +254,7 @@ int main(){
         for(int k = 0; k < traversals_per_thread; ++k) {
             // Thread-specific memory
             int starting_actor = 0;
-            void* init_model = create_deep_cfr_model(NUM_PLAYERS, MAX_ROUND_BETS, MAX_ACTIONS);
+            void* init_model = create_deep_cfr_model();
             std::array<std::array<void*, CFR_ITERS>, NUM_PLAYERS> nets;
             for (size_t i = 0; i<NUM_PLAYERS; ++i) {
                 for (size_t j = 0; j < CFR_ITERS; ++j){

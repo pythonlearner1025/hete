@@ -14,7 +14,7 @@
 struct TraverseAdvantage {
     Infoset infoset;
     int iteration;
-    std::array<double, MAX_ACTIONS> advantages;
+    std::array<double, NUM_ACTIONS> advantages;
 };
 
 // The traverse function

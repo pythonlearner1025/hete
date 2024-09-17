@@ -14,14 +14,13 @@
 
 struct CardEmbeddingImpl : torch::nn::Module {
     torch::nn::Embedding rank{nullptr}, suit{nullptr}, card{nullptr};
-    int64_t dim;
 
     // Constructor
-    CardEmbeddingImpl(int64_t dim_) : dim(dim_) {
+    CardEmbeddingImpl() {
         // Initialize Embedding layers
-        rank = register_module("rank", torch::nn::Embedding(13, dim));
-        suit = register_module("suit", torch::nn::Embedding(4, dim));
-        card = register_module("card", torch::nn::Embedding(52, dim));
+        rank = register_module("rank", torch::nn::Embedding(13,MODEL_DIM));
+        suit = register_module("suit", torch::nn::Embedding(4,MODEL_DIM));
+        card = register_module("card", torch::nn::Embedding(52,MODEL_DIM));
     }
 
     // Forward pass
@@ -52,18 +51,18 @@ struct CardEmbeddingImpl : torch::nn::Module {
         suit_indices = torch::clamp(suit_indices, 0, 3);  // Suits: 0-3
         
         // Compute embeddings
-        auto card_embs = card->forward(x);             // [B*num_cards, dim]
-        auto rank_embs = rank->forward(rank_indices);  // [B*num_cards, dim]
-        auto suit_embs = suit->forward(suit_indices);  // [B*num_cards, dim]
+        auto card_embs = card->forward(x);             // [B*num_cards,MODEL_DIM]
+        auto rank_embs = rank->forward(rank_indices);  // [B*num_cards,MODEL_DIM]
+        auto suit_embs = suit->forward(suit_indices);  // [B*num_cards,MODEL_DIM]
         
         // Sum the embeddings
-        auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards, dim]
+        auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards,MODEL_DIM]
         
         // Zero out embeddings for 'no card'
-        embs = embs * valid.unsqueeze(1); // [B*num_cards, dim]
+        embs = embs * valid.unsqueeze(1); // [B*num_cards,MODEL_DIM]
         
         // Reshape and sum across cards
-        embs = embs.view({B, num_cards, -1}).sum(1); // [B, dim]
+        embs = embs.view({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
         return embs;
     }
 };
@@ -80,11 +79,9 @@ struct DeepCFRModelImpl : torch::nn::Module {
     torch::nn::Linear comb1{nullptr}, comb2{nullptr}, comb3{nullptr};
     torch::nn::LayerNorm norm{nullptr};
     torch::nn::Linear action_head{nullptr};
-    int64_t dim;
 
     // Constructor
-    DeepCFRModelImpl(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim_ = 256)
-        : dim(dim_) {
+    DeepCFRModelImpl(){
         
         int64_t n_card_types = 4;
         // Initialize card_embeddings ModuleList
@@ -92,31 +89,32 @@ struct DeepCFRModelImpl : torch::nn::Module {
 
         for(int64_t i = 0; i < n_card_types; ++i){
             // Create and add CardEmbedding modules to the list
-            auto card_embedding = CardEmbedding(dim);
+            CardEmbedding embedding;
+            auto card_embedding = embedding;
             card_embeddings->push_back(card_embedding);
         }
 
         // Initialize card linear layers
-        card1 = register_module("card1", torch::nn::Linear(dim * n_card_types, dim));
-        card2 = register_module("card2", torch::nn::Linear(dim, dim));
-        card3 = register_module("card3", torch::nn::Linear(dim, dim));
+        card1 = register_module("card1", torch::nn::Linear(MODEL_DIM* n_card_types,MODEL_DIM));
+        card2 = register_module("card2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
+        card3 = register_module("card3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
 
         // Initialize bet linear layers
-        // Calculate input size based on the formula: (n_bets * n_players * nrounds - nrounds) * 2
-        int64_t bet_input_size = (n_bets * n_players * 4) * 2;
+        // Calculate input size based on the formula: (MAX_ROUND_BETS * NUM_PLAYERS * nrounds - nrounds) * 2
+        int64_t bet_input_size = (MAX_ROUND_BETS * NUM_PLAYERS * 4) * 2;
         //std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
-        bet1 = register_module("bet1", torch::nn::Linear(bet_input_size, dim));
-        bet2 = register_module("bet2", torch::nn::Linear(dim, dim));
+        bet1 = register_module("bet1", torch::nn::Linear(bet_input_size,MODEL_DIM));
+        bet2 = register_module("bet2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
 
         // Initialize combined trunk layers
-        comb1 = register_module("comb1", torch::nn::Linear(2 * dim, dim));
-        comb2 = register_module("comb2", torch::nn::Linear(dim, dim));
-        comb3 = register_module("comb3", torch::nn::Linear(dim, dim));
+        comb1 = register_module("comb1", torch::nn::Linear(2 *MODEL_DIM,MODEL_DIM));
+        comb2 = register_module("comb2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
+        comb3 = register_module("comb3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
         
         // Correct LayerNorm initialization with a vector
-        norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({dim})));
+        norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({MODEL_DIM})));
         
-        action_head = register_module("action_head", torch::nn::Linear(dim, n_actions));
+        action_head = register_module("action_head", torch::nn::Linear(MODEL_DIM, NUM_ACTIONS));
     }
 
     // Forward pass
@@ -154,18 +152,18 @@ struct DeepCFRModelImpl : torch::nn::Module {
                 throw std::runtime_error("Module is not of type CardEmbeddingImpl");
             }
             // Forward pass through CardEmbedding
-            auto card_emb = embedding_module->forward(cards[i]); // [N, dim]
+            auto card_emb = embedding_module->forward(cards[i]); // [N,MODEL_DIM]
             card_embs.push_back(card_emb);
             DEBUG_INFO("cardembed done");
         }
         // Concatenate embeddings from all card groups
-        auto card_embs_cat = torch::cat(card_embs, /*dim=*/1); // [N, dim * n_card_types]
+        auto card_embs_cat = torch::cat(card_embs, /*dim=*/1); // [N,MODEL_MODEL_DIM* n_card_types]
         DEBUG_INFO("cardconcat");
         
         // Pass through card linear layers with ReLU activations
-        auto x = torch::relu(card1->forward(card_embs_cat)); // [N, dim]
-        x = torch::relu(card2->forward(x));                  // [N, dim]
-        x = torch::relu(card3->forward(x));                  // [N, dim]
+        auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
+        x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
+        x = torch::relu(card3->forward(x));                  // [N,MODEL_DIM]
         DEBUG_INFO("card forwqrds");
 
         // 2. Bet Branch
@@ -179,19 +177,19 @@ struct DeepCFRModelImpl : torch::nn::Module {
         DEBUG_INFO("bet_feats shape: " << bet_feats.sizes());
         DEBUG_INFO("bet1 weight shape: " << bet1->weight.sizes());
         DEBUG_INFO("bet1 bias shape: " << bet1->bias.sizes());
-        auto y = torch::relu(bet1->forward(bet_feats));           // [N, dim]
-        y = torch::relu(bet2->forward(y) + y);                    // [N, dim]
+        auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
+        y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
         DEBUG_INFO("bet12 complete");
 
         // 3. Combined Trunk
-        auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 * dim]
-        z = torch::relu(comb1->forward(z));                       // [N, dim]
-        z = torch::relu(comb2->forward(z) + z);                    // [N, dim] (Residual)
-        z = torch::relu(comb3->forward(z) + z);                    // [N, dim] (Residual)
+        auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 *MODEL_DIM]
+        z = torch::relu(comb1->forward(z));                       // [N,MODEL_DIM]
+        z = torch::relu(comb2->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
+        z = torch::relu(comb3->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
         z = norm->forward(z);                                      // LayerNorm
         
         // Action Head
-        auto output = action_head->forward(z);                      // [N, n_actions]
+        auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
         DEBUG_INFO("act head complete");
         //std::cout << "forward complete" << std::endl;
         return output;
@@ -204,8 +202,8 @@ TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRMod
 // ========================
 
 // Factory functions
-void* create_deep_cfr_model(int64_t n_players, int64_t n_bets, int64_t n_actions, int64_t dim) {
-    return new DeepCFRModel(n_players, n_bets, n_actions, dim);
+void* create_deep_cfr_model() {
+    return new DeepCFRModel;
 }
 
 torch::Tensor deep_cfr_model_forward(void* model_ptr, std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
@@ -232,74 +230,107 @@ void set_model_eval_mode(void* model_ptr) {
     (*model)->eval(); // Correctly call eval()
 }
 
-int64_t get_action_head_dim(void* model_ptr) {
-    if (model_ptr == nullptr) {
-        throw std::invalid_argument("Model pointer is null.");
+/*
+    BATCH IS FASTER
+
+    Total forward call time over 1326 calls: 161239 microseconds
+    Average batched forward call time over 30 calls @ BS=1326: 7790.6 microseconds
+    ~20x speedup
+*/
+
+void create_batch(const std::array<torch::Tensor, 4>& cards_template, const torch::Tensor& bet_fracs_template, const torch::Tensor& bet_status_template, int64_t batch_size, std::array<torch::Tensor, 4>& batched_cards, torch::Tensor& batched_bet_fracs, torch::Tensor& batched_bet_status) {
+    // Since input values don't matter, we'll create tensors with the correct shapes
+    for (int i = 0; i < 4; ++i) {
+        if (cards_template[i].defined()) {
+            auto card_shape = cards_template[i].sizes(); // Original shape
+            std::vector<int64_t> new_shape(card_shape.begin(), card_shape.end());
+            new_shape[0] = batch_size; // Update batch size
+            batched_cards[i] = torch::zeros(new_shape, cards_template[i].options());
+        } else {
+            batched_cards[i] = torch::Tensor();
+        }
     }
-    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
-    return (*model)->action_head->weight.size(0);
+
+    auto bet_fracs_shape = bet_fracs_template.sizes();
+    std::vector<int64_t> new_bet_fracs_shape(bet_fracs_shape.begin(), bet_fracs_shape.end());
+    new_bet_fracs_shape[0] = batch_size;
+    batched_bet_fracs = torch::zeros(new_bet_fracs_shape, bet_fracs_template.options());
+
+    auto bet_status_shape = bet_status_template.sizes();
+    std::vector<int64_t> new_bet_status_shape(bet_status_shape.begin(), bet_status_shape.end());
+    new_bet_status_shape[0] = batch_size;
+    batched_bet_status = torch::zeros(new_bet_status_shape, bet_status_template.options());
 }
 
-int profile_net() {
-    try {
-        // Define model parameters
-        int64_t n_card_types = 2; // e.g., hole and board
-        int64_t n_players = 2;
-        int64_t n_bets = 10;
-        int64_t n_actions = 10;
-        int64_t dim = 256;
+void profile_net() {
+    // Define model parameters
+    int64_t n_card_types = 4;
 
-        // Instantiate the model
-        DeepCFRModel model(n_players, n_bets, n_actions, dim);
+    // Instantiate the model
+    DeepCFRModel model;
 
-        // Set the model to evaluation mode
-        model->eval();
+    // Set the model to evaluation mode
+    model->eval();
 
-        // Create dummy input data
-        int64_t N = 5; // Batch size
-        std::array<torch::Tensor, 4> cards;
-        
-        // Example card groups: [N, 2] and [N, 3]
-        // Using -1 to indicate 'no card'
-        cards[0] = torch::randint(-1, 52, {N, 2}, torch::kInt64);
-        cards[1] = torch::randint(-1, 52, {N, 3}, torch::kInt64);
-        
-        // Calculate bet_input_size based on the constructor formula
-        int64_t nrounds = 4;
-        int64_t bet_input_size = (n_bets * n_players * nrounds - nrounds) * 2;
-        
-        // Create dummy bet_fracs and bet_status tensors
-        torch::Tensor bet_fracs = torch::rand({N, (n_bets * n_players * nrounds - nrounds)}, torch::kFloat);
-        torch::Tensor bet_status = torch::randint(0, 2, {N, (n_bets * n_players * nrounds - nrounds)}, torch::kInt64);
+    // Create dummy input data for a single batch
+    int64_t N = 1; // Original batch size
+    std::array<torch::Tensor, 4> cards;
+    cards[0] = torch::zeros({N,2}, torch::kInt64);
+    cards[1] = torch::zeros({N,3}, torch::kInt64);
+    cards[2] = torch::zeros({N,1}, torch::kInt64);
+    cards[3] = torch::zeros({N,1}, torch::kInt64);
 
-        // Measure average model forward call time over 1000 calls
-        int num_calls = 1000;
-        auto start = std::chrono::high_resolution_clock::now();
-        
-        for (int i = 0; i < num_calls; ++i) {
-            torch::Tensor output = model->forward(cards, bet_fracs, bet_status);
-        }
-        
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        
-        double avg_time = duration.count() / static_cast<double>(num_calls);
-        
-        std::cout << "Average forward call time over " << num_calls << " calls: " 
-                  << avg_time << " microseconds" << std::endl;
-        
-        // avg time is 203.878 microseconds
+    int64_t nrounds = 4;
+    int64_t bet_input_size = (MAX_ROUND_BETS * NUM_PLAYERS * 4);
 
-    } catch (const c10::Error& e) {
-        std::cerr << "LibTorch error: " << e.msg() << std::endl;
-        return -1;
-    } catch (const std::exception& e) {
-        std::cerr << "Standard exception: " << e.what() << std::endl;
-        return -1;
-    } catch (...) {
-        std::cerr << "Unknown exception occurred!" << std::endl;
-        return -1;
+    torch::Tensor bet_fracs = torch::zeros({N,bet_input_size}, torch::kFloat);
+    torch::Tensor bet_status = torch::zeros({N,bet_input_size}, torch::kInt64);
+
+    // Measure average model forward call time over 1000 calls with original batch size
+    int num_calls = 13260;
+    std::cout << "calling" << std::endl;    
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < num_calls; ++i) {
+        torch::Tensor output = model->forward(cards, bet_fracs, bet_status);
     }
 
-    return 0;
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+
+    std::cout << "Total forward call time over " << num_calls << " calls: "
+                << duration.count() << " microseconds" << std::endl;
+
+    // Now measure the average time of batched inference over 30 calls
+    int batch_num_calls = 30;
+    int64_t batch_size = 13260; // New batch size for batched inference
+    double batch_total_time = 0.0;
+
+    // Create batched inputs
+    std::array<torch::Tensor, 4> batched_cards;
+    torch::Tensor batched_bet_fracs;
+    torch::Tensor batched_bet_status;
+
+    create_batch(cards, bet_fracs, bet_status, batch_size, batched_cards, batched_bet_fracs, batched_bet_status);
+
+    // Warm-up call to ensure any lazy initialization is done
+    model->forward(batched_cards, batched_bet_fracs, batched_bet_status);
+
+    for (int i = 0; i < batch_num_calls; ++i) {
+        auto batch_start = std::chrono::high_resolution_clock::now();
+
+        torch::Tensor output = model->forward(batched_cards, batched_bet_fracs, batched_bet_status);
+
+        auto batch_end = std::chrono::high_resolution_clock::now();
+
+        auto batch_duration = std::chrono::duration_cast<std::chrono::microseconds>(batch_end - batch_start);
+
+        batch_total_time += batch_duration.count();
+    }
+
+    double batch_avg_time = batch_total_time / static_cast<double>(batch_num_calls);
+
+    std::cout << "Average batched forward call time over " << batch_num_calls << " calls: "
+                << batch_avg_time << " microseconds" << std::endl;
+
 }
