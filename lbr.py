@@ -161,10 +161,6 @@ def get_lbr_act(
             if opp_range[i] != 0:
                 opp_range[i] = new_prob
     
-    # TODO why tf is kh, kc still in ?
-
-
-
     # ~440 milllion eval/sec, x220000 speedup from python v above
     wp = wprollout(player_hand, opp_range, pubset.board, deck_cards)
 
@@ -208,7 +204,6 @@ def get_lbr_act(
         cf_bet_status = deepcopy(pubset.bet_status)
         cf_bet_fracs.append(bet_amt)
         cf_bet_status.append(1)
-        bet_amt = player_stack * cf_bet_fracs[-1]
 
         # Batch inference
         batch_size = len(cf_opp_range)
@@ -248,11 +243,7 @@ def get_lbr_act(
                 one_hot[max_index] = 1
             fp += prob * regrets[foldidx]
             # update prob of being in all other hand
-            for h2 in range(batch_size):
-                if h2 != h1: 
-                    cf_opp_range[h2] *= (1-regrets[foldidx])
-                else:
-                    cf_opp_range[h1] *= regrets[foldidx]
+            cf_opp_range[h1] = prob * (1-regrets[foldidx])
 
         cf_opp_range /= cf_opp_range.sum()
 

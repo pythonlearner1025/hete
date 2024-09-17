@@ -8,13 +8,7 @@
 #include "engine.h"
 #include "model/model.h"
 #include "constants.h"
-
-// Define a structure for Infoset
-struct Infoset {
-    std::array<torch::Tensor, 4> cards;
-    torch::Tensor bet_fracs;
-    torch::Tensor bet_status;
-};
+#include "util.h"
 
 // Define a structure for traverse advantages
 struct TraverseAdvantage {
