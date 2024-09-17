@@ -33,6 +33,8 @@ public:
     bool is_playing(int player) const;
     std::array<double, NUM_PLAYERS> get_finishing_stacks() const;
     double get_pot() const;
+    std::array<int, 5> get_board() const;
+    std::array<uint8_t, 52> get_deck() const;
 
     // action verification functions
     bool can_fold(int player) const;
@@ -71,7 +73,6 @@ public:
         std::array<std::array<double, MAX_ROUND_BETS>, 4> bets_per_round; // 4 betting rounds
     };
 
-    std::array<int, 5> get_board() const;
     std::array<Player, NUM_PLAYERS> players;
 
     PokerEngine(const PokerEngine& other);

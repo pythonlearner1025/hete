@@ -42,11 +42,11 @@ PokerEngine::PokerEngine(
         throw std::invalid_argument("starting_stacks size must equal n_players"); 
     }
     // init empty board
-    this->board[0] = 69;
-    this->board[1] = 69;
-    this->board[2] = 69;
-    this->board[3] = 69;
-    this->board[4] = 69;
+    this->board[0] = NULL_CARD;
+    this->board[1] = NULL_CARD;
+    this->board[2] = NULL_CARD;
+    this->board[3] = NULL_CARD;
+    this->board[4] = NULL_CARD;
     
     // Initialize players
     for (int i = 0; i < NUM_PLAYERS; ++i) {
@@ -89,8 +89,8 @@ PokerEngine::PokerEngine(
     DEBUG_INFO("player 1 stack" << this->players[1].stack);
 
     if (!manual) {
-        // Initialize deck with 69
-        this->deck.fill(69);
+        // Initialize deck with NULL_CARD
+        this->deck.fill(NULL_CARD);
 
         std::array<int, 52> full_deck;
         std::iota(full_deck.begin(), full_deck.end(), 0);
@@ -117,9 +117,9 @@ PokerEngine::PokerEngine(
         size_t remaining_cards = 52 - card_index;
         std::copy(full_deck.begin() + card_index, full_deck.end(), this->deck.begin());
 
-        // Fill the rest of the deck with 69 if there are any spots left
+        // Fill the rest of the deck with NULL_CARD if there are any spots left
         if (remaining_cards < 52) {
-            std::fill(this->deck.begin() + remaining_cards, this->deck.end(), 69);
+            std::fill(this->deck.begin() + remaining_cards, this->deck.end(), NULL_CARD);
         }
     }
 }
@@ -310,7 +310,7 @@ int PokerEngine::get_next_card() {
     std::array<int, 52> valid_indices;
     int valid_count = 0;
     for (int i = 0; i < 52; ++i) {
-        if (this->deck[i] != 69) {
+        if (this->deck[i] != NULL_CARD) {
             valid_indices[valid_count++] = i;
         }
     }
@@ -320,7 +320,7 @@ int PokerEngine::get_next_card() {
     std::uniform_int_distribution<> dist(0, valid_count - 1);
     int idx = valid_indices[dist(rng)];
     int card = this->deck[idx];
-    this->deck[idx] = 69; // Mark as used
+    this->deck[idx] = NULL_CARD; // Mark as used
     return card;
 }
 
@@ -474,7 +474,7 @@ void PokerEngine::showdown() {
     // deal remaining cards at showdown
     if (this->round < 3) {
         for (size_t i=0; i<5; ++i) {
-            if (this->board[i] == 69) {
+            if (this->board[i] == NULL_CARD) {
                 int card = get_next_card(); 
                 this->board[i] = card;
             }
@@ -630,13 +630,17 @@ bool PokerEngine::should_force_check_or_call() const {
 std::array<int, 5> PokerEngine::get_board() const {
     std::array<int, 5> ret;
     for (size_t i = 0; i < 5; ++i) {
-        if (this->board[i] != 69) {
+        if (this->board[i] != NULL_CARD) {
             ret[i] = this->board[i];
         } else {
             ret[i] = -1;
         }
     }
     return ret;
+}
+
+std::array<uint8_t, 52> PokerEngine::get_deck() const {
+    return this->deck;
 }
 
 std::pair<std::array<bool, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, NUM_PLAYERS * 4 * MAX_ROUND_BETS>> PokerEngine::construct_history() const {
@@ -706,11 +710,11 @@ void PokerEngine::manual_deal_board(const std::array<int, 5> board_cards) {
         }     
     }
     // Optionally, update the round if the board is fully dealt
-    if (this->board[2] != 69 && this->round == 0) { // Flop
+    if (this->board[2] != NULL_CARD && this->round == 0) { // Flop
         this->round = 1;
-    } else if (this->board[3] != 69 && this->round == 1) { // Turn
+    } else if (this->board[3] != NULL_CARD && this->round == 1) { // Turn
         this->round = 2;
-    } else if (this->board[4] != 69 && this->round == 2) { // River
+    } else if (this->board[4] != NULL_CARD && this->round == 2) { // River
         this->round = 3;
     } 
 }

@@ -13,6 +13,12 @@ constexpr int CFR_ITERS = 1;
 constexpr int MAX_ROUND_BETS = 3;
 constexpr int BOARD_SIZE = 5;
 
+// shared
+constexpr int NULL_CARD = 69; 
+
+// optimization
+constexpr bool ESTIMATE_SHOWDOWN = true; 
+
 //tests
 constexpr int TEST_MAX_ACTIONS = 6;
 constexpr int PHH_NUM_PLAYERS = NUM_PLAYERS;
