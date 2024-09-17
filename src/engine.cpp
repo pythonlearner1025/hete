@@ -216,6 +216,13 @@ bool PokerEngine::can_check_or_call(int player) const {
     return true;
 }
 
+double PokerEngine::get_call_amount(int player) const {
+    double min_bet_amt = calc_min_bet_amt(player);
+    DEBUG_INFO("player total bet: " << this->players[player].total_bet);
+    double call_amt = min_bet_amt - this->players[player].total_bet;    
+    return call_amt;
+}
+
 void PokerEngine::check_or_call(int player) {
     if (player != this->actor) {
         throw std::runtime_error("Player mismatch: checking/calling player " + std::to_string(player+1) + " is not the current actor " + std::to_string(this->actor+1));

@@ -3,6 +3,10 @@
 #include <torch/torch.h>
 #include "engine.h"
 #include "debug.h"
+#include <array>
+#include <numeric>
+#include <algorithm>
+#include <cmath>
 
 // Define a structure for Infoset
 struct Infoset {
@@ -13,10 +17,15 @@ struct Infoset {
 
 Infoset prepare_infoset(
     PokerEngine& game,
-    int player,
-    int max_bets_per_player
+    int player
 );
 
-std::array<double, MAX_ACTIONS> regret_match(const torch::Tensor& logits, int n_acts);
+std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits);
+
+template <typename T, std::size_t N>
+std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr);
+
+template <typename T, std::size_t N>
+std::size_t argmax(const std::array<T, N>& arr);
 
 #endif
