@@ -234,6 +234,7 @@ def get_lbr_act(
         for h1 in range(batch_size):
             prob = cf_opp_range[h1]
             regrets = batch_logits[h1]
+            # btw this regret matching is incorrect
             regrets_sum = regrets.sum().item()
             if regrets_sum > 0:
                 regrets = (regrets / (torch.full_like(regrets, regrets_sum) - regrets))

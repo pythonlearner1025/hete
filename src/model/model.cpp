@@ -230,6 +230,21 @@ void set_model_eval_mode(void* model_ptr) {
     (*model)->eval(); // Correctly call eval()
 }
 
+// Add this to model.cpp
+std::vector<torch::Tensor> get_model_parameters(void* model_ptr) {
+    if (model_ptr == nullptr) {
+        throw std::invalid_argument("Model pointer is null.");
+    }
+    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+    std::vector<torch::Tensor> params;
+    for (auto& p : (*model)->parameters()) {
+        if (p.requires_grad()) {
+            params.push_back(p);
+        }
+    }
+    return params;
+}
+
 /*
     BATCH IS FASTER
 

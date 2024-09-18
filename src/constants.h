@@ -16,6 +16,10 @@ constexpr int BOARD_SIZE = 5;
 // model 
 constexpr int64_t MODEL_DIM = 256;
 
+// training
+constexpr size_t TRAIN_BS = 1024;
+constexpr size_t TRAIN_EPOCHS = 10;
+
 // eval
 constexpr size_t BS = 10000;
 constexpr size_t WP_MC_SAMPLES = 30000;
