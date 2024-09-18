@@ -24,6 +24,7 @@ constexpr size_t TRAIN_EPOCHS = 10;
 constexpr size_t BS = 10000;
 constexpr size_t WP_MC_SAMPLES = 30000;
 constexpr size_t ACT_MC_SAMPLES = 10000;
+constexpr size_t EVAL_MC_SAMPLES = 10000; 
 
 // shared
 constexpr int NULL_CARD = 69; 
