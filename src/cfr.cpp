@@ -27,61 +27,7 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
-// Sample an action according to the strategy probabilities
-int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
-    double r = static_cast<double>(rand()) / RAND_MAX;
-    double cumulative = 0.0;
-    DEBUG_INFO("r is " << r);
-    for (int i = 0; i < NUM_ACTIONS; ++i) {
-        DEBUG_INFO("strat " << i << " has p=" << strat[i]);
-        cumulative += strat[i];
-        if (r <= cumulative) {
-            DEBUG_INFO("returning " << i);
-            return i;
-        }
-    }
-    DEBUG_INFO("returning " << (NUM_ACTIONS - 1));
-    return NUM_ACTIONS - 1; // Return last valid action if none selected
-}
 
-void take_action(PokerEngine& engine, int player, int act) {
-    DEBUG_INFO("Chosen act: " << act);
-    if (act == 0) {
-        engine.fold(player);
-        return;
-    }
-    if (act == 1) {
-        engine.check_or_call(player); 
-        return;
-    }
-    double inc = engine.get_pot() * 1.0 / static_cast<double>(NUM_ACTIONS);
-    double bet_amt = inc;
-    for (int a = 2; a < NUM_ACTIONS; ++a) {
-        if (a == act) {
-            engine.bet_or_raise(player, bet_amt);
-            return;
-        }
-        bet_amt += inc;
-    }
-}
-
-bool verify_action(PokerEngine& engine, int player, int act) {
-    if (act == 0) {
-        return engine.can_fold(player);
-    }
-    if (act == 1) {
-        return engine.can_check_or_call(player); 
-    }
-    double inc = engine.get_pot() * 1.0 / static_cast<double>(NUM_ACTIONS);
-    double bet_amt = inc;
-    for (int a = 2; a < NUM_ACTIONS; ++a) {
-        if (a == act) {
-            return engine.can_bet_or_raise(player, bet_amt);
-        }
-        bet_amt += inc;
-    }
-    return false;
-}
 
 // The traverse function implementation
 double traverse(
@@ -369,6 +315,7 @@ int train() {
                     advs_idx++;
                 }
                 void* player_model = player_nets[player];
+
                 // train
                 torch::optim::Adam optimizer(get_model_parameters(player_model));
 
@@ -400,6 +347,7 @@ int train() {
                     DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << mean_loss.item<float>());
                 }
             }
+
             // todo eval - implement game sim in eval.cpp
         }
     }
@@ -428,17 +376,16 @@ int profile_cfr(){
     DEBUG_NONE("MAX_ROUND_BETS = " << MAX_ROUND_BETS);
     DEBUG_NONE("NUM_THREADS = " << num_threads);
 
+    std::array<void*, NUM_PLAYERS> nets;
+    for (size_t i=0; i<NUM_PLAYERS; ++i) {
+        nets[i] = create_deep_cfr_model();
+    }
+
     auto thread_func = [&](int traversals_per_thread, int thread_id) {
         for(int k = 0; k < traversals_per_thread; ++k) {
             // Thread-specific memory
             int starting_actor = 0;
             void* init_model = create_deep_cfr_model();
-            std::array<std::array<void*, CFR_ITERS>, NUM_PLAYERS> nets;
-            for (size_t i = 0; i<NUM_PLAYERS; ++i) {
-                for (size_t j = 0; j < CFR_ITERS; ++j){
-                    nets[i][j] = init_model;
-                }
-            }
             // Initialize PokerEngine
             PokerEngine engine(
                 starting_stacks, 

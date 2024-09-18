@@ -28,4 +28,9 @@ std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr);
 template <typename T, std::size_t N>
 std::size_t argmax(const std::array<T, N>& arr);
 
+// taking actions
+int sample_action(const std::array<double, NUM_ACTIONS>& strat);
+void take_action(PokerEngine& engine, int player, int act);
+bool verify_action(PokerEngine& engine, int player, int act);
+
 #endif

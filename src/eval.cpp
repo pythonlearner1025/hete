@@ -269,7 +269,7 @@ int get_lbr_act(
     std::array<std::array<int, 2>, NUM_PLAYERS> player_hands, 
     int player,
     std::array<std::vector<Infoset>, NUM_PLAYERS-1> opp_histories, // list of each infoset opp saw before acting 
-    std::array<int, 52> deck_cards
+    std::array<uint8_t, 52> deck_cards
 ) {
 
     std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> opp_ranges{}; 
@@ -559,4 +559,88 @@ int get_lbr_act(
     if (action_utils[max_act] > 0) return max_act;
     // fold
     return 0;
+}
+
+double evaluate(
+    void* policy_net,
+    int player
+) {
+    // init game 
+    std::array<double, NUM_PLAYERS> starting_stacks{};
+    std::array<double, NUM_PLAYERS> antes{};
+    for (size_t i=0; i<NUM_PLAYERS; ++i) {
+        starting_stacks[i] = 100.0;
+        antes[i] = 0.0;
+    } 
+    double small_bet = 0.5;
+    double big_bet = 1.0;
+    int starting_actor = 0;
+
+    // init history
+    std::array<std::vector<Infoset>, NUM_PLAYERS-1> opp_histories;
+
+    // avg mbb winnings
+    double total_mbb = 0.0;
+
+    for (size_t i = 0; i < EVAL_MC_SAMPLES; ++i) {
+
+        // randomize the player's & opps hands  
+        PokerEngine engine(
+            starting_stacks, 
+            antes,
+            starting_actor,
+            small_bet, 
+            big_bet, 
+            false
+        );
+
+        std::array<std::array<int, 2>, NUM_PLAYERS> player_hands{};
+        for (size_t p=0;p<NUM_PLAYERS;++p) {
+            player_hands[p] = engine.players[p].hand;
+        }
+
+        while (!engine.get_game_status() || !engine.is_playing(player)) {
+            if (engine.turn() == player) {
+                DEBUG_INFO("Player's turn");
+                Infoset I = prepare_infoset(engine, player);
+                torch::Tensor logits = deep_cfr_model_forward(policy_net, I.cards, I.bet_fracs, I.bet_status);
+                std::array<double, NUM_ACTIONS> strat = regret_match(logits);
+                int act = sample_action(strat);
+                  // Verify and adjust action if necessary
+                while (!verify_action(engine, player, act)) {
+                    act = (act - 1) % NUM_ACTIONS;
+                }
+                // Take action
+                take_action(engine, player, act);
+                DEBUG_INFO("I selected action: " << action_index);
+            } else {
+                int opp = engine.turn();
+                Infoset I = prepare_infoset(engine, player);
+                opp_histories[opp].push_back(I);
+
+                int act = get_lbr_act(
+                    engine, 
+                    policy_net, 
+                    player_hands, 
+                    opp, 
+                    opp_histories, 
+                    engine.get_deck()
+                );
+
+                while (!verify_action(engine, player, act)) {
+                    act = (act - 1) % NUM_ACTIONS;
+                }
+                // Take action
+                take_action(engine, player, act);
+                DEBUG_INFO("I selected action: " << act); 
+            }
+        }
+
+        total_mbb += (engine.get_payoffs()[player] / big_bet) * 1000;
+        // calculate the player's winnings
+    }
+
+    double avg_mbb = total_mbb / EVAL_MC_SAMPLES;
+    DEBUG_NONE("Policy net is evaluated at: " << avg_mbb << "mbb");
+    return avg_mbb;
 }
