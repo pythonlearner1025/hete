@@ -87,7 +87,7 @@ bool verify_action(PokerEngine& engine, int player, int act) {
 double traverse(
     PokerEngine& engine, 
     int player,
-    std::array<std::array<void*, CFR_ITERS>, NUM_PLAYERS>& nets,
+    std::array<void*, NUM_PLAYERS>& nets,
     int t,
     std::vector<TraverseAdvantage>& all_traverse_advs,
     std::atomic<size_t>& all_traverse_advs_index,
@@ -112,9 +112,9 @@ double traverse(
     else if (engine.turn() == player) {
         DEBUG_INFO(get_timestamp() << " My turn");
 
-        void* net_ptr = nets[player][CFR_ITERS-1];
+        void* net_ptr = nets[player];
 
-        Infoset I = prepare_infoset(engine, player, MAX_ROUND_BETS);
+        Infoset I = prepare_infoset(engine, player);
 
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
 
@@ -194,7 +194,7 @@ double traverse(
         DEBUG_INFO(get_timestamp() << " Opponent's turn");
         // Opponent's turn
         int actor = engine.turn();
-        void* net_ptr = nets[actor][CFR_ITERS-1];
+        void* net_ptr = nets[actor];
         // Prepare infoset
         Infoset I = prepare_infoset(engine, actor);
         // Forward pass
@@ -227,8 +227,186 @@ double traverse(
     }
 }
 
+std::array<torch::Tensor, 4> init_batched_cards() {
+    // Define shapes for each tensor
+    std::vector<int64_t> hand_shape = {TRAIN_BS, 2};
+    std::vector<int64_t> flop_shape = {TRAIN_BS, 3};
+    std::vector<int64_t> turn_shape = {TRAIN_BS, 1};
+    std::vector<int64_t> river_shape = {TRAIN_BS, 1};
+    
+    std::array<torch::Tensor, 4> batched_cards;
+
+    // Initialize all tensors with zeros
+    batched_cards[0] = torch::zeros(hand_shape, torch::kInt32);
+    batched_cards[1] = torch::zeros(flop_shape, torch::kInt32);
+    batched_cards[2] = torch::zeros(turn_shape, torch::kInt32);
+    batched_cards[3] = torch::zeros(river_shape, torch::kInt32);
+
+    return batched_cards;
+}
+
+torch::Tensor init_batched_fracs() {
+    std::vector<int64_t> batched_fracs_shape = {TRAIN_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
+    return torch::zeros(batched_fracs_shape, torch::kInt32);
+}
+
+torch::Tensor init_batched_status() { 
+    std::vector<int64_t> batched_status_shape = {TRAIN_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
+    return torch::zeros(batched_status_shape, torch::kInt32);
+}
+
+torch::Tensor init_batched_advs() {
+    std::vector<int64_t> batched_advs_shape = {TRAIN_BS, NUM_ACTIONS};
+    return torch::zeros(batched_advs_shape, torch::kFloat);
+}
+
+torch::Tensor init_batched_iters() {
+    std::vector<int64_t> batched_iters_shape = {TRAIN_BS, 1};
+    return torch::zeros(batched_iters_shape, torch::kFloat);
+}
+
+int train() {
+    std::vector<TraverseAdvantage> all_traverse_advs;
+    std::vector<std::array<void*, NUM_PLAYERS>> total_nets;
+    std::array<void*, NUM_PLAYERS> init_player_nets{};
+    for (size_t i=0; i<NUM_PLAYERS; ++i) {
+        init_player_nets[i] = create_deep_cfr_model();
+    }
+    total_nets.push_back(init_player_nets);
+    all_traverse_advs.resize(MAX_ADVS); // Preallocate capacity
+    std::atomic<size_t> all_traverse_advs_index(0);
+
+    // init concurrency
+    std::mutex advs_mutex;
+    unsigned int num_threads = std::thread::hardware_concurrency();
+    int traversals_per_thread = NUM_TRAVERSALS / num_threads;
+    DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
+    int remaining_traversals = NUM_TRAVERSALS % num_threads;
+    DEBUG_NONE("Remaining traversals: " << remaining_traversals);
+    std::array<double, NUM_PLAYERS> starting_stacks{};
+    std::array<double, NUM_PLAYERS> antes{};
+    for (size_t i=0; i<NUM_PLAYERS; ++i) {
+        starting_stacks[i] = 100.0;
+        antes[i] = 0.0;
+    } 
+    double small_bet = 0.5;
+    double big_bet = 1.0;
+    int starting_actor = 0;
+
+    // todo init nets
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<void*, NUM_PLAYERS> nets) {
+        for(int k = 0; k < traversals_per_thread; ++k) {
+            
+            // Initialize PokerEngine
+            PokerEngine engine(
+                starting_stacks, 
+                antes,
+                starting_actor,
+                small_bet, 
+                big_bet, 
+                false
+            );
+
+            try {
+                traverse(engine, player, nets, cfr_iter, all_traverse_advs, all_traverse_advs_index, advs_mutex);
+            }
+            catch(const std::exception& e) {
+                DEBUG_INFO(e.what());
+                continue;
+            }
+        }
+    };
+
+    for (int cfr_iter=0; cfr_iter<CFR_ITERS; ++cfr_iter) {
+        std::array<void*, NUM_PLAYERS> player_nets = total_nets[total_nets.size()-1];
+        for (int player=0; player<NUM_PLAYERS; ++player) {
+            // spawn threads
+            std::vector<std::thread> threads;
+            for(unsigned int thread_id = 0; thread_id < num_threads; ++thread_id) {
+                // for each thread, create new deep copy of the total_nets[total_nets.size()-1]
+                int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
+                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &player_nets]() {
+                    thread_func(traversals_to_run, thread_id, player, cfr_iter, player_nets);
+                });
+            }
+
+            // Wait for all threads to finish
+            for(auto& thread : threads) {
+                if(thread.joinable()) {
+                    thread.join();
+                }
+            }
+
+            // todo train
+            int batch_repeat = all_traverse_advs.size() / TRAIN_BS;
+            int advs_idx = 0;
+            for (int _ = 0; _ < batch_repeat; ++_) {
+                // init batch tensors
+                std::array<torch::Tensor, 4> batched_cards = init_batched_cards();
+                torch::Tensor batched_fracs = init_batched_fracs();
+                torch::Tensor batched_status = init_batched_status();
+                torch::Tensor batched_advs = init_batched_advs();
+                torch::Tensor batched_iters = init_batched_iters();
+
+                // populate batches 
+                for (size_t i = 0; i < TRAIN_BS; ++i) {
+                    Infoset infoset = all_traverse_advs[advs_idx].infoset;
+                    int iteration = all_traverse_advs[advs_idx].iteration;
+                    std::array<double, NUM_ACTIONS> advs = all_traverse_advs[advs_idx].advantages;
+
+                    batched_cards[0][i] = infoset.cards[0];
+                    batched_cards[1][i] = infoset.cards[1];
+                    batched_cards[2][i] = infoset.cards[2];
+                    batched_cards[3][i] = infoset.cards[3];
+                    batched_cards[4][i] = infoset.cards[4];
+
+                    batched_fracs[i] = infoset.bet_fracs;
+                    batched_status[i] = infoset.bet_status;
+                    for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                        batched_advs[i][a] = advs[a];
+                    }
+                    batched_iters[i] = iteration;
+                    advs_idx++;
+                }
+                void* player_model = player_nets[player];
+                // train
+                torch::optim::Adam optimizer(get_model_parameters(player_model));
+
+                for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
+                    optimizer.zero_grad();
+
+                    torch::Tensor pred = deep_cfr_model_forward(
+                        player_model, 
+                        batched_cards, 
+                        batched_fracs, 
+                        batched_status
+                    );
+
+                    torch::Tensor loss = torch::nn::functional::mse_loss(
+                        pred, 
+                        batched_advs,
+                        torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
+                    );
+
+                    // Calculate mean loss for logging
+                    torch::Tensor mean_loss = loss.mean();
+
+                    loss *= batched_iters;
+                    
+                    loss.backward();
+                    optimizer.step();
+
+                    // Log the mean loss every epoch
+                    DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << mean_loss.item<float>());
+                }
+            }
+            // todo eval - implement game sim in eval.cpp
+        }
+    }
+}
+
 // Function to run multiple traversals in parallel
-int y(){
+int profile_cfr(){
     int player = 0;
     double small_bet = 0.5;
     double big_bet = 1;
