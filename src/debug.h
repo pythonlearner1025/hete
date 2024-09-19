@@ -12,8 +12,6 @@
 #define DEBUG_LEVEL_WARNING 2
 #define DEBUG_LEVEL_ERROR 3
 
-
-
 // Base debug macro using variadic arguments
 // add back in __FILE__ << ":" << __LINE__ if needed
 #define DEBUG_PRINT(level_str, ...) \

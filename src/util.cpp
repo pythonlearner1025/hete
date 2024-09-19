@@ -111,7 +111,6 @@ Infoset prepare_infoset(
     I.bet_status = torch::from_blob(history.first.data(), 
                                     {1, static_cast<long long>(history.first.size())}, 
                                     torch::kBool).to(torch::kFloat32);
-
     return I;
 }
 
@@ -138,32 +137,4 @@ std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
         strat[max_index] = 1.0;
     }
     return strat;
-}
-
-
-
-template <typename T, std::size_t N>
-std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr) {
-    // First, we'll use reduce to sum all elements
-    T sum = std::reduce(arr.begin(), arr.end());
-
-    // Check if the sum is zero to avoid division by zero
-    if (std::abs(sum) < std::numeric_limits<T>::epsilon()) {
-        // If sum is zero, return a uniform distribution
-        std::array<T, N> result;
-        std::fill(result.begin(), result.end(), static_cast<T>(1.0 / N));
-        return result;
-    }
-
-    // Now, we'll use transform to divide each element by the sum
-    std::array<T, N> result;
-    std::transform(arr.begin(), arr.end(), result.begin(),
-                   [sum](const T& val) { return val / sum; });
-
-    return result;
-}
-
-template <typename T, std::size_t N>
-std::size_t argmax(const std::array<T, N>& arr) {
-    return std::distance(arr.begin(), std::max_element(arr.begin(), arr.end()));
 }

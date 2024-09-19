@@ -29,40 +29,57 @@ struct CardEmbeddingImpl : torch::nn::Module {
         auto num_cards = input.size(1);
         
         // Flatten the input
-        auto x = input.view({-1});
+        auto x = input.reshape({-1});
+        //DEBUG_NONE("flattened");
         
         // Create a mask for valid cards (input >= 0)
         auto valid = (x >= 0).to(torch::kFloat); // -1 indicates 'no card'
         
         // Clamp negative indices to 0
         x = torch::clamp(x, /*min=*/0);
+        //DEBUG_NONE("clamped");
         
         // Ensure x is of integer type
         if (x.dtype() != torch::kInt64 && x.dtype() != torch::kInt32) {
             x = x.to(torch::kInt64);
         }
         
+        //DEBUG_NONE("integer ensured");
         // Compute rank and suit indices using integer division and modulo
         auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt64);      // [B*num_cards]
         auto suit_indices = torch::remainder(x, 4).to(torch::kInt64);        // [B*num_cards]
         
+        //DEBUG_NONE("rank suit compute");
         // Ensure that rank_indices and suit_indices are within valid ranges
         rank_indices = torch::clamp(rank_indices, 0, 12); // Ranks: 0-12
         suit_indices = torch::clamp(suit_indices, 0, 3);  // Suits: 0-3
         
+        //DEBUG_NONE("valid range check");
+        //DEBUG_NONE(x.sizes());
+        //DEBUG_NONE(x);
+        //DEBUG_NONE(rank_indices.sizes());
+        //DEBUG_NONE(rank_indices);
+        //DEBUG_NONE(suit_indices.sizes());
+        //DEBUG_NONE(suit_indices);
+
         // Compute embeddings
         auto card_embs = card->forward(x);             // [B*num_cards,MODEL_DIM]
         auto rank_embs = rank->forward(rank_indices);  // [B*num_cards,MODEL_DIM]
         auto suit_embs = suit->forward(suit_indices);  // [B*num_cards,MODEL_DIM]
+        //DEBUG_NONE("embed fwd");
         
         // Sum the embeddings
         auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards,MODEL_DIM]
+        //DEBUG_NONE("embed sum");
         
         // Zero out embeddings for 'no card'
         embs = embs * valid.unsqueeze(1); // [B*num_cards,MODEL_DIM]
+        //DEBUG_NONE("zero out");
+
         
         // Reshape and sum across cards
-        embs = embs.view({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
+        embs = embs.reshape({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
+        //DEBUG_NONE("reshaped");
         return embs;
     }
 };
@@ -127,59 +144,60 @@ struct DeepCFRModelImpl : torch::nn::Module {
             bet_status: torch::Tensor of shape [N, bet_input_size / 2]
         */
 
-        DEBUG_INFO("Entering DeepCFRModelImpl::forward");
+        //DEBUG_NONE("Entering DeepCFRModelImpl::forward");
         // Add checks for tensor shapes and types
         for (int i = 0; i < 4; ++i) {
             if (!cards[i].defined()) {
                 throw std::runtime_error("Card tensor " + std::to_string(i) + " is not defined");
             }
-            DEBUG_INFO("Card " << i << " shape: " << cards[i].sizes());
+            //DEBUG_NONE("Card " << i << " shape: " << cards[i].sizes());
         }
         if (!bet_fracs.defined() || !bet_status.defined()) {
             throw std::runtime_error("bet_fracs or bet_status is not defined");
         }
-        DEBUG_INFO("bet_fracs shape: " << bet_fracs.sizes());
-        DEBUG_INFO("bet_status shape: " << bet_status.sizes());
+        //DEBUG_NONE("bet_fracs shape: " << bet_fracs.sizes());
+        //DEBUG_NONE("bet_status shape: " << bet_status.sizes());
 
         // 1. Card Branch
         std::vector<torch::Tensor> card_embs;
         int64_t n_card_types = card_embeddings->size();
         for(int64_t i = 0; i < n_card_types; ++i){
+            //DEBUG_NONE(i);
             // Retrieve the i-th CardEmbedding module
             auto embedding_module = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(i));
             if (!embedding_module){
-                DEBUG_INFO("moduel != cardembeddingimpl");
+                //DEBUG_NONE("moduel != cardembeddingimpl");
                 throw std::runtime_error("Module is not of type CardEmbeddingImpl");
             }
             // Forward pass through CardEmbedding
             auto card_emb = embedding_module->forward(cards[i]); // [N,MODEL_DIM]
             card_embs.push_back(card_emb);
-            DEBUG_INFO("cardembed done");
+            //DEBUG_NONE("cardembed done");
         }
         // Concatenate embeddings from all card groups
         auto card_embs_cat = torch::cat(card_embs, /*dim=*/1); // [N,MODEL_MODEL_DIM* n_card_types]
-        DEBUG_INFO("cardconcat");
+        //DEBUG_NONE("cardconcat");
         
         // Pass through card linear layers with ReLU activations
         auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
         x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
         x = torch::relu(card3->forward(x));                  // [N,MODEL_DIM]
-        DEBUG_INFO("card forwqrds");
+        //DEBUG_NONE("card forwqrds");
 
         // 2. Bet Branch
         auto bet_size = bet_fracs.clamp(/*min=*/0, /*max=*/1e6); // Clamp between 0 and 1e6
         auto bet_occurred = bet_status.to(torch::kFloat);        // [N, bet_input_size / 2]
         auto bet_feats = torch::cat({bet_size, bet_occurred}, /*dim=*/1); // [N, bet_input_size]
-        DEBUG_INFO("bet embed complete");
+        //DEBUG_NONE("bet embed complete");
         
         // Pass through bet linear layers with ReLU and residual connection
         // Inside the forward function, just before the Bet Branch
-        DEBUG_INFO("bet_feats shape: " << bet_feats.sizes());
-        DEBUG_INFO("bet1 weight shape: " << bet1->weight.sizes());
-        DEBUG_INFO("bet1 bias shape: " << bet1->bias.sizes());
+        //DEBUG_NONE("bet_feats shape: " << bet_feats.sizes());
+        //DEBUG_NONE("bet1 weight shape: " << bet1->weight.sizes());
+        //DEBUG_NONE("bet1 bias shape: " << bet1->bias.sizes());
         auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
         y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
-        DEBUG_INFO("bet12 complete");
+        //DEBUG_NONE("bet12 complete");
 
         // 3. Combined Trunk
         auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 *MODEL_DIM]

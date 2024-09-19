@@ -9,6 +9,7 @@
 #include "model/model.h"
 #include "constants.h"
 #include "util.h"
+#include "eval.h"
 
 // Define a structure for traverse advantages
 struct TraverseAdvantage {
