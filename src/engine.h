@@ -34,7 +34,7 @@ public:
     std::array<double, NUM_PLAYERS> get_finishing_stacks() const;
     double get_pot() const;
     std::array<int, 5> get_board() const;
-    std::array<uint8_t, 52> get_deck() const;
+    std::array<int, 52> get_deck() const;
     double get_call_amount(int player) const;
 
     // action verification functions
@@ -62,7 +62,7 @@ public:
     void showdown();
 
     // Construct bet history
-    std::pair<std::array<bool, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, NUM_PLAYERS * 4 * MAX_ROUND_BETS>> construct_history() const;
+    std::pair<std::array<int, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, NUM_PLAYERS * 4 * MAX_ROUND_BETS>> construct_history() const;
 
     enum class PlayerStatus { Playing, Folded, AllIn, Out };
     struct Player {
@@ -92,8 +92,8 @@ private:
     bool game_status;
 
     std::array<double, NUM_PLAYERS> payoffs;
-    std::array<uint8_t, 5> board; 
-    std::array<uint8_t, 52> deck;
+    std::array<int, 5> board; 
+    std::array<int, 52> deck;
     std::mt19937 rng;
 
     // Game flow

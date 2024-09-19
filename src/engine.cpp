@@ -117,7 +117,7 @@ PokerEngine::PokerEngine(
         size_t remaining_cards = 52 - card_index;
         std::copy(full_deck.begin() + card_index, full_deck.end(), this->deck.begin());
 
-        // Fill the rest of the deck with NULL_CARD if there are any spots left
+        // Fill the rest of the deck with USED_CARD if there are any spots left
         if (remaining_cards < 52) {
             std::fill(this->deck.begin() + remaining_cards, this->deck.end(), NULL_CARD);
         }
@@ -635,25 +635,17 @@ bool PokerEngine::should_force_check_or_call() const {
 /* PUBLIC QUERIES */ 
 
 std::array<int, 5> PokerEngine::get_board() const {
-    std::array<int, 5> ret;
-    for (size_t i = 0; i < 5; ++i) {
-        if (this->board[i] != NULL_CARD) {
-            ret[i] = this->board[i];
-        } else {
-            ret[i] = -1;
-        }
-    }
-    return ret;
+    return this->board;
 }
 
-std::array<uint8_t, 52> PokerEngine::get_deck() const {
+std::array<int, 52> PokerEngine::get_deck() const {
     return this->deck;
 }
 
-std::pair<std::array<bool, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, NUM_PLAYERS * 4 * MAX_ROUND_BETS>> PokerEngine::construct_history() const {
+std::pair<std::array<int, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, NUM_PLAYERS * 4 * MAX_ROUND_BETS>> PokerEngine::construct_history() const {
     constexpr int total_bets = 4 * NUM_PLAYERS * MAX_ROUND_BETS;
 
-    std::array<bool, total_bets> bet_status{};
+    std::array<int, total_bets> bet_status{};
     std::array<double, total_bets> bet_fracs{};
     std::fill(bet_status.begin(), bet_status.end(), false);
     std::fill(bet_fracs.begin(), bet_fracs.end(), 0.0);

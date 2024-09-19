@@ -12,6 +12,8 @@
 #include <iomanip> // For std::put_time
 #include <sstream> // For std::stringstream
 
+struct rusage measure_usage;
+
 //std::atomic<int> total_advantages(0);
 // Helper function for getting current timestamp
 std::string get_timestamp() {
@@ -27,8 +29,6 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
-
-
 // The traverse function implementation
 double traverse(
     PokerEngine& engine, 
@@ -42,6 +42,7 @@ double traverse(
     DEBUG_INFO(get_timestamp() << " Entering traverse()");
     DEBUG_INFO(get_timestamp() << " Game status: " << engine.get_game_status() << ", Is player playing: " << engine.is_playing(player));
 
+    
 
     for (size_t p=0; p<NUM_PLAYERS; ++p){
         DEBUG_INFO("player " << p << " hand: " << engine.players[p].hand[0] << "," << engine.players[p].hand[1]);
@@ -211,7 +212,7 @@ torch::Tensor init_batched_iters() {
     return torch::zeros(batched_iters_shape, torch::kFloat);
 }
 
-int train() {
+int main() {
     std::vector<TraverseAdvantage> all_traverse_advs;
     std::vector<std::array<void*, NUM_PLAYERS>> total_nets;
     std::array<void*, NUM_PLAYERS> init_player_nets{};
@@ -219,7 +220,7 @@ int train() {
         init_player_nets[i] = create_deep_cfr_model();
     }
     total_nets.push_back(init_player_nets);
-    all_traverse_advs.resize(MAX_ADVS); // Preallocate capacity
+    //all_traverse_advs.resize(MAX_ADVS); // Preallocate capacity
     std::atomic<size_t> all_traverse_advs_index(0);
 
     // init concurrency
@@ -283,6 +284,10 @@ int train() {
                 }
             }
 
+
+            void* player_model = player_nets[player];
+            DEBUG_NONE("traversals complete");
+
             // todo train
             int batch_repeat = all_traverse_advs.size() / TRAIN_BS;
             int advs_idx = 0;
@@ -293,32 +298,34 @@ int train() {
                 torch::Tensor batched_status = init_batched_status();
                 torch::Tensor batched_advs = init_batched_advs();
                 torch::Tensor batched_iters = init_batched_iters();
+                DEBUG_NONE("init complete");
 
                 // populate batches 
+                DEBUG_NONE("collected advs count: " << all_traverse_advs.size());
                 for (size_t i = 0; i < TRAIN_BS; ++i) {
                     Infoset infoset = all_traverse_advs[advs_idx].infoset;
                     int iteration = all_traverse_advs[advs_idx].iteration;
                     std::array<double, NUM_ACTIONS> advs = all_traverse_advs[advs_idx].advantages;
 
-                    batched_cards[0][i] = infoset.cards[0];
-                    batched_cards[1][i] = infoset.cards[1];
-                    batched_cards[2][i] = infoset.cards[2];
-                    batched_cards[3][i] = infoset.cards[3];
-                    batched_cards[4][i] = infoset.cards[4];
+                    batched_cards[0][i] = infoset.cards[0].squeeze();
+                    batched_cards[1][i] = infoset.cards[1].squeeze();
+                    batched_cards[2][i] = infoset.cards[2].squeeze();
+                    batched_cards[3][i] = infoset.cards[3].squeeze();
 
-                    batched_fracs[i] = infoset.bet_fracs;
-                    batched_status[i] = infoset.bet_status;
+                    batched_fracs[i] = infoset.bet_fracs.squeeze();
+                    DEBUG_NONE("bet fracs init");
+                    batched_status[i] = infoset.bet_status.squeeze();
+                    DEBUG_NONE("bet status init");
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
                         batched_advs[i][a] = advs[a];
+                        DEBUG_NONE("fill action " << a);
                     }
                     batched_iters[i] = iteration;
                     advs_idx++;
                 }
-                void* player_model = player_nets[player];
-
                 // train
                 torch::optim::Adam optimizer(get_model_parameters(player_model));
-
+                DEBUG_NONE("begin training...");
                 for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
                     optimizer.zero_grad();
 
@@ -349,6 +356,7 @@ int train() {
             }
 
             // todo eval - implement game sim in eval.cpp
+            double eval_mbb = evaluate(player_model, player);
         }
     }
 }

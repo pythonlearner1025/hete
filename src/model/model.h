@@ -17,6 +17,7 @@ void* create_deep_cfr_model();
 torch::Tensor deep_cfr_model_forward(void* model_ptr, std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status);
 void delete_deep_cfr_model(void* model_ptr);
 void set_model_eval_mode(void* model_ptr); // If implemented
+std::vector<torch::Tensor> get_model_parameters(void* model_ptr);
 
 // test fn
 void profile_net();
