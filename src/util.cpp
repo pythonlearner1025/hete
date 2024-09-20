@@ -102,15 +102,19 @@ Infoset prepare_infoset(
     auto history = game.construct_history();
     get_cards(game, player, I);
 
-    // Convert bet_fracs array to tensor
-    I.bet_fracs = torch::from_blob(history.second.data(), 
-                                   {1, static_cast<long long>(history.second.size())}, 
-                                   torch::kFloat32);
+    torch::Tensor bet_status = torch::empty({1, history.first.size()}, torch::kInt);
+    auto status_accessor = bet_status.accessor<int,2>();
 
-    // Convert bet_status array to tensor
-    I.bet_status = torch::from_blob(history.first.data(), 
-                                    {1, static_cast<long long>(history.first.size())}, 
-                                    torch::kBool).to(torch::kFloat32);
+    torch::Tensor bet_fracs = torch::empty({1, history.second.size()}, torch::kFloat);
+    auto frac_accessor = bet_fracs.accessor<float,2>();
+    for (size_t i = 0; i < NUM_PLAYERS * 4 * MAX_ROUND_BETS; ++i) {
+        status_accessor[0][i] = history.first[i]; 
+        frac_accessor[0][i] = history.second[i];
+    }
+
+    I.bet_fracs = bet_fracs;
+    I.bet_status = bet_status;
+
     return I;
 }
 

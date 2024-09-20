@@ -3,11 +3,11 @@
 
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
-constexpr size_t NUM_TRAVERSALS = 1;
+constexpr size_t NUM_TRAVERSALS = 3000;
 constexpr size_t MAX_ADVS = 1e8; // Adjust this based on your expected maximum number of advantages
 constexpr size_t NUM_ACTIONS = 5;
 constexpr size_t MAX_PLAYERS = 6;
-constexpr size_t CFR_ITERS = 1;
+constexpr size_t CFR_ITERS = 300;
 
 // engine
 constexpr int MAX_ROUND_BETS = 3;
@@ -17,7 +17,7 @@ constexpr int BOARD_SIZE = 5;
 constexpr int64_t MODEL_DIM = 256;
 
 // training
-constexpr size_t TRAIN_BS = 1;
+constexpr size_t TRAIN_BS = 1024;
 constexpr size_t TRAIN_EPOCHS = 10;
 
 // eval

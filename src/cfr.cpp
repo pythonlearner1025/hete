@@ -36,13 +36,10 @@ double traverse(
     std::array<void*, NUM_PLAYERS>& nets,
     int t,
     std::vector<TraverseAdvantage>& all_traverse_advs,
-    std::atomic<size_t>& all_traverse_advs_index,
     std::mutex& advs_mutex
 ) {
     DEBUG_INFO(get_timestamp() << " Entering traverse()");
     DEBUG_INFO(get_timestamp() << " Game status: " << engine.get_game_status() << ", Is player playing: " << engine.is_playing(player));
-
-    
 
     for (size_t p=0; p<NUM_PLAYERS; ++p){
         DEBUG_INFO("player " << p << " hand: " << engine.players[p].hand[0] << "," << engine.players[p].hand[1]);
@@ -60,7 +57,6 @@ double traverse(
         DEBUG_INFO(get_timestamp() << " My turn");
 
         void* net_ptr = nets[player];
-
         Infoset I = prepare_infoset(engine, player);
 
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
@@ -103,7 +99,6 @@ double traverse(
                 nets, 
                 t, 
                 all_traverse_advs,
-                all_traverse_advs_index,
                 advs_mutex
             );
             DEBUG_INFO("value: " << value << " strat %: " << strat[a]);
@@ -123,14 +118,10 @@ double traverse(
         }
         DEBUG_INFO(""); // For newline
 
-         // Add to traverse_advs with synchronization
-        size_t index = all_traverse_advs_index.fetch_add(1);
-        if (index < all_traverse_advs.size()) {
-            // No need for a mutex since each thread writes to a unique index
-            all_traverse_advs[index] = TraverseAdvantage{I, t, advs};
-        } else {
-            // Handle the case where we've exceeded MAX_ADVS
-            DEBUG_INFO("Warning: Exceeded MAX_ADVS");
+        // No need for a mutex since each thread writes to a unique index
+        {
+            std::lock_guard<std::mutex> lock(advs_mutex);
+            all_traverse_advs.push_back(TraverseAdvantage{I, t, advs});
         }
 
         // Return expected value
@@ -168,7 +159,6 @@ double traverse(
             nets,
             t,
             all_traverse_advs,
-            all_traverse_advs_index,
             advs_mutex
         );
     }
@@ -180,38 +170,41 @@ std::array<torch::Tensor, 4> init_batched_cards() {
     std::vector<int64_t> flop_shape = {TRAIN_BS, 3};
     std::vector<int64_t> turn_shape = {TRAIN_BS, 1};
     std::vector<int64_t> river_shape = {TRAIN_BS, 1};
-    
     std::array<torch::Tensor, 4> batched_cards;
 
     // Initialize all tensors with zeros
-    batched_cards[0] = torch::zeros(hand_shape, torch::kInt32);
-    batched_cards[1] = torch::zeros(flop_shape, torch::kInt32);
-    batched_cards[2] = torch::zeros(turn_shape, torch::kInt32);
-    batched_cards[3] = torch::zeros(river_shape, torch::kInt32);
+    batched_cards[0] = torch::empty(hand_shape, torch::kInt32);
+    batched_cards[1] = torch::empty(flop_shape, torch::kInt32);
+    batched_cards[2] = torch::empty(turn_shape, torch::kInt32);
+    batched_cards[3] = torch::empty(river_shape, torch::kInt32);
 
     return batched_cards;
 }
 
 torch::Tensor init_batched_fracs() {
     std::vector<int64_t> batched_fracs_shape = {TRAIN_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return torch::zeros(batched_fracs_shape, torch::kInt32);
+    return torch::empty(batched_fracs_shape, torch::kFloat);
 }
 
 torch::Tensor init_batched_status() { 
     std::vector<int64_t> batched_status_shape = {TRAIN_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return torch::zeros(batched_status_shape, torch::kInt32);
+    return torch::empty(batched_status_shape, torch::kFloat);
 }
 
 torch::Tensor init_batched_advs() {
     std::vector<int64_t> batched_advs_shape = {TRAIN_BS, NUM_ACTIONS};
-    return torch::zeros(batched_advs_shape, torch::kFloat);
+    return torch::empty(batched_advs_shape, torch::kFloat);
 }
 
 torch::Tensor init_batched_iters() {
     std::vector<int64_t> batched_iters_shape = {TRAIN_BS, 1};
-    return torch::zeros(batched_iters_shape, torch::kFloat);
+    return torch::empty(batched_iters_shape, torch::kFloat);
 }
 
+// more cfr traversal steps converges faster but is sample inefficient
+// 3000 cfr steps * 500 cfr iters converges same as 100,000 and 500 cfr iters
+// so estimate around ~1 million total steps budget
+// around 10,000 training iter steps needed per iter
 int main() {
     std::vector<TraverseAdvantage> all_traverse_advs;
     std::vector<std::array<void*, NUM_PLAYERS>> total_nets;
@@ -221,14 +214,13 @@ int main() {
     }
     total_nets.push_back(init_player_nets);
     //all_traverse_advs.resize(MAX_ADVS); // Preallocate capacity
-    std::atomic<size_t> all_traverse_advs_index(0);
 
     // init concurrency
     std::mutex advs_mutex;
     unsigned int num_threads = std::thread::hardware_concurrency();
     int traversals_per_thread = NUM_TRAVERSALS / num_threads;
-    DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
     int remaining_traversals = NUM_TRAVERSALS % num_threads;
+    DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
     DEBUG_NONE("Remaining traversals: " << remaining_traversals);
     std::array<double, NUM_PLAYERS> starting_stacks{};
     std::array<double, NUM_PLAYERS> antes{};
@@ -243,7 +235,6 @@ int main() {
     // todo init nets
     auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<void*, NUM_PLAYERS> nets) {
         for(int k = 0; k < traversals_per_thread; ++k) {
-            
             // Initialize PokerEngine
             PokerEngine engine(
                 starting_stacks, 
@@ -255,7 +246,7 @@ int main() {
             );
 
             try {
-                traverse(engine, player, nets, cfr_iter, all_traverse_advs, all_traverse_advs_index, advs_mutex);
+                traverse(engine, player, nets, cfr_iter, all_traverse_advs, advs_mutex);
             }
             catch(const std::exception& e) {
                 DEBUG_INFO(e.what());
@@ -264,7 +255,7 @@ int main() {
         }
     };
 
-    for (int cfr_iter=0; cfr_iter<CFR_ITERS; ++cfr_iter) {
+    for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         std::array<void*, NUM_PLAYERS> player_nets = total_nets[total_nets.size()-1];
         for (int player=0; player<NUM_PLAYERS; ++player) {
             // spawn threads
@@ -284,11 +275,23 @@ int main() {
                 }
             }
 
-
             void* player_model = player_nets[player];
-            DEBUG_NONE("traversals complete");
-
+            DEBUG_NONE("CFR ITER = " << cfr_iter);
+            DEBUG_NONE("COLLECTED ADVS = " << all_traverse_advs.size());
             // todo train
+            // draw training samples
+            std::random_device rd;
+            std::mt19937 rng(rd());
+            std::uniform_real_distribution<double> dist(0.0, 1.0);
+            std::shuffle(all_traverse_advs.begin(), all_traverse_advs.end(), rng);
+            std::vector<TraverseAdvantage> training_advs;
+            for (size_t i = 0; i < TRAIN_BS * TRAIN_EPOCHS; ++i) {
+                if (i < all_traverse_advs.size()) {
+                    training_advs.push_back(all_traverse_advs[i]);
+                }
+            }
+
+            DEBUG_NONE("TOTAL TRAINING SAMPLES = " << training_advs.size());
             int batch_repeat = all_traverse_advs.size() / TRAIN_BS;
             int advs_idx = 0;
             for (int _ = 0; _ < batch_repeat; ++_) {
@@ -298,34 +301,35 @@ int main() {
                 torch::Tensor batched_status = init_batched_status();
                 torch::Tensor batched_advs = init_batched_advs();
                 torch::Tensor batched_iters = init_batched_iters();
-                DEBUG_NONE("init complete");
-
                 // populate batches 
-                DEBUG_NONE("collected advs count: " << all_traverse_advs.size());
                 for (size_t i = 0; i < TRAIN_BS; ++i) {
+                    if (advs_idx >= all_traverse_advs.size()) {
+                    //    DEBUG_NONE("advs_idx > all_traverse_advs");
+                        break;
+                    }
                     Infoset infoset = all_traverse_advs[advs_idx].infoset;
                     int iteration = all_traverse_advs[advs_idx].iteration;
                     std::array<double, NUM_ACTIONS> advs = all_traverse_advs[advs_idx].advantages;
-
                     batched_cards[0][i] = infoset.cards[0].squeeze();
                     batched_cards[1][i] = infoset.cards[1].squeeze();
                     batched_cards[2][i] = infoset.cards[2].squeeze();
                     batched_cards[3][i] = infoset.cards[3].squeeze();
-
                     batched_fracs[i] = infoset.bet_fracs.squeeze();
-                    DEBUG_NONE("bet fracs init");
+                    //batched_fracs[i] = infoset.bet_fracs.squeeze();
                     batched_status[i] = infoset.bet_status.squeeze();
-                    DEBUG_NONE("bet status init");
+                    auto batched_advs_accessor = batched_advs.accessor<float, 2>();
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs[i][a] = advs[a];
-                        DEBUG_NONE("fill action " << a);
+                        batched_advs_accessor[i][a] = advs[a];
                     }
                     batched_iters[i] = iteration;
                     advs_idx++;
                 }
+
                 // train
                 torch::optim::Adam optimizer(get_model_parameters(player_model));
-                DEBUG_NONE("begin training...");
+
+                // TODO random sampling from all_traverse_advs
+                // maximum 50 million samples
                 for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
                     optimizer.zero_grad();
 
@@ -336,22 +340,24 @@ int main() {
                         batched_status
                     );
 
+
                     torch::Tensor loss = torch::nn::functional::mse_loss(
                         pred, 
                         batched_advs,
                         torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
                     );
 
-                    // Calculate mean loss for logging
-                    torch::Tensor mean_loss = loss.mean();
 
                     loss *= batched_iters;
+
+                    //torch::Tensor columnwise_mean_loss = loss.mean(1);
+                    torch::Tensor batch_mean_loss = loss.mean(1).mean();
                     
-                    loss.backward();
+                    batch_mean_loss.backward();
                     optimizer.step();
 
                     // Log the mean loss every epoch
-                    DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << mean_loss.item<float>());
+                    DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << batch_mean_loss.item<float>());
                 }
             }
 
@@ -372,7 +378,6 @@ int profile_cfr(){
     
     std::vector<TraverseAdvantage> all_traverse_advs;
     all_traverse_advs.resize(MAX_ADVS); // Preallocate capacity
-    std::atomic<size_t> all_traverse_advs_index(0);
     std::mutex advs_mutex;
 
     // Determine the number of available hardware threads
@@ -405,7 +410,7 @@ int profile_cfr(){
             );
 
             try {
-                traverse(engine, player, nets, t, all_traverse_advs, all_traverse_advs_index, advs_mutex);
+                traverse(engine, player, nets, t, all_traverse_advs, advs_mutex);
             }
             catch(const std::exception& e) {
                 DEBUG_INFO(e.what());
@@ -438,9 +443,9 @@ int profile_cfr(){
         }
     }
 
+    /*
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
-    size_t total_traversals = all_traverse_advs_index.load();
     auto throughput_recur = static_cast<float>(total_traversals) / duration.count();
     auto throughput = static_cast<float>(NUM_TRAVERSALS) / duration.count();
 
@@ -450,6 +455,7 @@ int profile_cfr(){
     DEBUG_NONE(get_timestamp() << " Size of all_traverse_advs: " << all_traverse_advs.size());
     DEBUG_NONE(get_timestamp() << " traverse call throughput : " << throughput_recur << " calls/s");
     DEBUG_NONE(get_timestamp() << " traverse iter throughput : " << throughput << " traversals/s");
+    */
 
     return 0;
 }
