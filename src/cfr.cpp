@@ -29,6 +29,12 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
+torch::Tensor random_forward() {
+    return torch::rand({NUM_ACTIONS}) * 2 - 1;  // Random values between -1 and 1
+}
+
+thread_local std::vector<TraverseAdvantage> local_advs;
+
 // The traverse function implementation
 double traverse(
     PokerEngine& engine, 
@@ -60,6 +66,7 @@ double traverse(
         Infoset I = prepare_infoset(engine, player);
 
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
+       // torch::Tensor logits = random_forward();
 
         DEBUG_INFO(get_timestamp() << " Neural network logits: " << logits);
 
@@ -119,10 +126,15 @@ double traverse(
         DEBUG_INFO(""); // For newline
 
         // No need for a mutex since each thread writes to a unique index
+        // turns out, the mutex slows down things by 1000x. 
+        /*
         {
             std::lock_guard<std::mutex> lock(advs_mutex);
             all_traverse_advs.push_back(TraverseAdvantage{I, t, advs});
         }
+        */
+       local_advs.push_back(TraverseAdvantage{I, t, advs});
+
 
         // Return expected value
         DEBUG_INFO(get_timestamp() << "ev: " << ev);
@@ -137,6 +149,7 @@ double traverse(
         Infoset I = prepare_infoset(engine, actor);
         // Forward pass
         torch::Tensor logits = deep_cfr_model_forward(net_ptr, I.cards, I.bet_fracs, I.bet_status);
+        //torch::Tensor logits = random_forward();
         // Regret matching
         std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
@@ -201,6 +214,10 @@ torch::Tensor init_batched_iters() {
     return torch::empty(batched_iters_shape, torch::kFloat);
 }
 
+std::vector<TraverseAdvantage>& get_local_advs() {
+    return local_advs;
+}
+
 // more cfr traversal steps converges faster but is sample inefficient
 // 3000 cfr steps * 500 cfr iters converges same as 100,000 and 500 cfr iters
 // so estimate around ~1 million total steps budget
@@ -235,6 +252,9 @@ int main() {
     // todo init nets
     auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<void*, NUM_PLAYERS> nets) {
         for(int k = 0; k < traversals_per_thread; ++k) {
+            if (k > 0) {
+                DEBUG_NONE("thread=" << thread_id << ", traversal=" << k << ", advs=" << all_traverse_advs.size());
+            }
             // Initialize PokerEngine
             PokerEngine engine(
                 starting_stacks, 
@@ -254,6 +274,8 @@ int main() {
             }
         }
     };
+    // for threading use intel tbb if all else fails
+    std::vector<std::vector<TraverseAdvantage>> all_thread_advs;
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         std::array<void*, NUM_PLAYERS> player_nets = total_nets[total_nets.size()-1];
@@ -263,8 +285,9 @@ int main() {
             for(unsigned int thread_id = 0; thread_id < num_threads; ++thread_id) {
                 // for each thread, create new deep copy of the total_nets[total_nets.size()-1]
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
-                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &player_nets]() {
+                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &player_nets, &all_thread_advs]() {
                     thread_func(traversals_to_run, thread_id, player, cfr_iter, player_nets);
+                    all_thread_advs.push_back(std::move(get_local_advs()));
                 });
             }
 
@@ -274,6 +297,16 @@ int main() {
                     thread.join();
                 }
             }
+
+            // Merge results from all threads
+            std::vector<TraverseAdvantage> global_advs;
+            for (auto& thread_advs : all_thread_advs) {
+                global_advs.insert(global_advs.end(), 
+                                thread_advs.begin(), 
+                                thread_advs.end());
+            }
+
+         
 
             void* player_model = player_nets[player];
             DEBUG_NONE("CFR ITER = " << cfr_iter);
