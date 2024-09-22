@@ -52,7 +52,14 @@ public:
     bool verify_sufficient_funds(int player, double amount) const;
 
     // Utility functions
-    void reset();
+    void reset(
+        std::array<double, NUM_PLAYERS> starting_stacks, 
+        std::array<double, NUM_PLAYERS> antes, 
+        int actor, 
+        double small_blind, 
+        double big_blind, 
+        bool manual
+    );
 
     // manual mode
     void manual_deal_hand(int player, std::array<int, 2> hand);

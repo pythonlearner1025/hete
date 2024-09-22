@@ -31,7 +31,7 @@ class DeepCFRModel(nn.Module):
         self.card3 = nn.Linear(dim, dim)
 
         nrounds = 4
-        self.bet1 = nn.Linear((n_bets * n_players * nrounds - nrounds) * 2, dim)
+        self.bet1 = nn.Linear((n_bets * n_players * nrounds) * 2, dim)
         self.bet2 = nn.Linear(dim, dim)
 
         self.comb1 = nn.Linear(2 * dim, dim)
@@ -70,3 +70,57 @@ class DeepCFRModel(nn.Module):
         z = F.relu(self.comb3(z) + z)
         z = self.norm(z) # (z - mean) / std
         return self.action_head(z)
+
+if __name__ == '__main__':    
+    import time
+
+    # First, include the DeepCFRModel and CardEmbedding classes here
+    # (The code from your provided PyTorch model)
+
+    # Benchmark parameters
+    n_card_types = 4
+    n_players = 2
+    n_bets = 3
+    n_actions = 6
+    batch_size = 1
+    n_iterations = 1000
+
+    # Initialize the model
+    model = DeepCFRModel(n_card_types, n_players, n_bets, n_actions)
+
+    # Move model to GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
+    # Create dummy input data
+    cards = [
+        torch.randint(0, 52, (batch_size, 2), device=device),
+        torch.randint(0, 52, (batch_size, 3), device=device),
+        torch.randint(0, 52, (batch_size, 1), device=device),
+        torch.randint(0, 52, (batch_size, 1), device=device)
+    ]
+    bet_fracs = torch.rand((batch_size, (n_bets * n_players * 4)), device=device)
+    bet_status = torch.randint(0, 2, (batch_size, (n_bets * n_players * 4)), device=device)
+
+    # Warm-up run
+    with torch.no_grad():
+        _ = model(cards, bet_fracs, bet_status)
+
+    # Benchmark
+    start_time = time.time()
+
+    for i in range(n_iterations):
+        if i > 0:
+            start_time = time.time()
+        with torch.no_grad():
+            output = model(cards, bet_fracs, bet_status)
+        # Ensure computation is done
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+
+    end_time = time.time()
+
+    total_time = end_time - start_time
+    average_time = total_time / n_iterations
+
+    print(f"Total time for {n_iterations} iterations: {total_time:.4f} seconds")
+    print(f"Average time per iteration: {average_time*1000*1000*1000} ns")
