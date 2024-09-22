@@ -7,6 +7,8 @@ build/
 ompeval.cpython-312-darwin.so
 .vscode/
 
+*.pt
+
 # ignore 
 src/model/model
 src/model/CMakeFiles
