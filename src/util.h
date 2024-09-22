@@ -44,7 +44,8 @@ std::size_t argmax(const std::array<T, N>& arr) {
 
 // taking actions
 int sample_action(const std::array<double, NUM_ACTIONS>& strat);
-void take_action(PokerEngine& engine, int player, int act);
-bool verify_action(PokerEngine& engine, int player, int act);
-
+void take_action(PokerEngine* engine, int player, int act);
+bool verify_action(PokerEngine* engine, int player, int act);
+void get_cards(PokerEngine& game, int player, Infoset& I);
+torch::Tensor regret_match_batched(const torch::Tensor& batched_logits);
 #endif

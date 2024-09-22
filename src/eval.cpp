@@ -8,6 +8,7 @@
 #include <random>
 #include <numeric>
 
+/*
 constexpr int MAX_REMAINING_CARDS = 52 - 2 - 5;
 constexpr int MAX_OPP_RANGE = 1326;
 
@@ -644,15 +645,6 @@ int get_lbr_act(
 
             batch_idx++;
 
-            /*
-            DEBUG_INFO(batched_cards[1][0]);
-            DEBUG_INFO(batched_cards[2][0]);
-            DEBUG_INFO(batched_cards[3][0]);
-            std::cout << "Press Enter to continue...";
-            std::cin.get(); // Waits for the user to press Enter
-            std::cout << "Continuing execution..." << std::endl;
-            */
-
             // do batched inference and update counterfactual opponent ranges 
             if (batch_idx * live_opps == EVAL_BS) {
                 auto batched_logits = deep_cfr_model_forward(policy_net, batched_cards, batched_bet_fracs, batched_bet_status);
@@ -812,3 +804,4 @@ double evaluate(
     DEBUG_NONE("Policy net is evaluated at: " << avg_mbb << "mbb");
     return avg_mbb;
 }
+*/

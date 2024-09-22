@@ -300,9 +300,122 @@ bool PokerEngine::verify_sufficient_funds(int player, double amount) const {
     return true;
 }
 
-void PokerEngine::reset() {
-    // TODO: Implement
+
+void PokerEngine::reset(
+    std::array<double, NUM_PLAYERS> starting_stacks, 
+    std::array<double, NUM_PLAYERS> antes, 
+    int actor, 
+    double small_blind, 
+    double big_blind, 
+    bool manual
+    )
+{
+    if (NUM_PLAYERS < 2 || NUM_PLAYERS > MAX_PLAYERS) {
+        throw std::invalid_argument("Invalid number of players");
+    }
+
+    if (this->small_blind < 0 || this->big_blind < 0) {
+        throw std::invalid_argument("Blinds must be non-negative");
+    }
+
+    if (this->small_blind * 2 != this->big_blind) {
+        throw std::invalid_argument("Big blind must be twice the small blind");
+    }
+
+    if (NUM_PLAYERS != starting_stacks.size()) {
+        throw std::invalid_argument("starting_stacks size must equal n_players"); 
+    }
+
+    this->small_blind = small_blind;
+    this->big_blind = big_blind;
+    this->round = round;
+    this->actor = actor;
+    this->pot = pot;
+    this->game_status = true;
+    this->manual = manual;
+    // init empty board
+    this->board[0] = NULL_CARD;
+    this->board[1] = NULL_CARD;
+    this->board[2] = NULL_CARD;
+    this->board[3] = NULL_CARD;
+    this->board[4] = NULL_CARD;
+    
+    // Initialize players
+    for (int i = 0; i < NUM_PLAYERS; ++i) {
+        this->players[i].stack = starting_stacks[i];
+        this->players[i].status = PlayerStatus::Playing;
+        // Initialize bets_per_round for each player
+        for (int r = 0; r < 4; ++r) {
+            for (int b = 0; b < MAX_ROUND_BETS; ++b) {
+                this->players[i].bets_per_round[r][b] = -1.0;
+            }
+        }
+    }
+
+    // Collect Antes
+    for (int i = 0; i < NUM_PLAYERS; ++i) {
+        double ante = antes[i];
+        if (ante > 0) {
+            this->players[i].stack -= ante;
+            this->pot += ante;
+        }
+    }
+    
+    // Initialize payoffs
+    std::fill(this->payoffs.begin(), this->payoffs.end(), 0.0);
+
+    // Initialize blinds
+    this->players[0].stack -= small_blind;
+    this->players[0].total_bet += small_blind;
+    this->players[0].bets_per_round[0][0] = small_blind;
+
+    this->players[1].stack -= big_blind;
+    this->players[1].total_bet += big_blind;
+    this->players[1].bets_per_round[0][0] = big_blind;
+
+    this->pot += small_blind;
+    this->pot += big_blind;
+
+    DEBUG_INFO("init pot" << this->pot);
+    DEBUG_INFO("player 0 stack" << this->players[0].stack);
+    DEBUG_INFO("player 1 stack" << this->players[1].stack);
+
+    if (!manual) {
+        // Initialize deck with NULL_CARD
+        this->deck.fill(NULL_CARD);
+
+        std::array<int, 52> full_deck;
+        std::iota(full_deck.begin(), full_deck.end(), 0);
+        std::random_device rd;
+        std::mt19937 rng(rd());
+        std::shuffle(full_deck.begin(), full_deck.end(), rng);
+
+        // Deal cards to players
+        size_t card_index = 0;
+        for (size_t player = 0; player < NUM_PLAYERS; ++player) {
+            int card1 = full_deck[card_index++];
+            int card2 = full_deck[card_index++];
+            /*
+            std::string user_input;
+            std::getline(std::cin, user_input);
+            DEBUG_INFO("card1: " << card1 << " card2: " << card2);
+            */
+
+            this->players[player].hand[0] = card1;
+            this->players[player].hand[1] = card2;
+        }
+
+        // Remaining deck
+        size_t remaining_cards = 52 - card_index;
+        std::copy(full_deck.begin() + card_index, full_deck.end(), this->deck.begin());
+
+        // Fill the rest of the deck with USED_CARD if there are any spots left
+        if (remaining_cards < 52) {
+            std::fill(this->deck.begin() + remaining_cards, this->deck.end(), NULL_CARD);
+        }
+    }
 }
+
 
 
 /* 

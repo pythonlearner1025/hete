@@ -1,6 +1,7 @@
 // model.cpp
 
 #include <torch/torch.h>
+#include <torch/script.h>
 #include <vector>
 #include <iostream>
 #include <stdexcept>
@@ -30,52 +31,36 @@ struct CardEmbeddingImpl : torch::nn::Module {
         
         // Flatten the input
         auto x = input.reshape({-1});
-        //DEBUG_NONE("flattened");
         
         // Create a mask for valid cards (input >= 0)
         auto valid = (x >= 0).to(torch::kFloat); // -1 indicates 'no card'
         
         // Clamp negative indices to 0
         x = torch::clamp(x, /*min=*/0);
-        //DEBUG_NONE("clamped");
         
         // Ensure x is of integer type
         if (x.dtype() != torch::kInt64 && x.dtype() != torch::kInt32) {
             x = x.to(torch::kInt64);
         }
         
-        //DEBUG_NONE("integer ensured");
         // Compute rank and suit indices using integer division and modulo
         auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt64);      // [B*num_cards]
         auto suit_indices = torch::remainder(x, 4).to(torch::kInt64);        // [B*num_cards]
         
-        //DEBUG_NONE("rank suit compute");
         // Ensure that rank_indices and suit_indices are within valid ranges
         rank_indices = torch::clamp(rank_indices, 0, 12); // Ranks: 0-12
         suit_indices = torch::clamp(suit_indices, 0, 3);  // Suits: 0-3
-        
-        //DEBUG_NONE("valid range check");
-        //DEBUG_NONE(x.sizes());
-        //DEBUG_NONE(x);
-        //DEBUG_NONE(rank_indices.sizes());
-        //DEBUG_NONE(rank_indices);
-        //DEBUG_NONE(suit_indices.sizes());
-        //DEBUG_NONE(suit_indices);
 
         // Compute embeddings
         auto card_embs = card->forward(x);             // [B*num_cards,MODEL_DIM]
         auto rank_embs = rank->forward(rank_indices);  // [B*num_cards,MODEL_DIM]
         auto suit_embs = suit->forward(suit_indices);  // [B*num_cards,MODEL_DIM]
-        //DEBUG_NONE("embed fwd");
         
         // Sum the embeddings
         auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards,MODEL_DIM]
-        //DEBUG_NONE("embed sum");
         
         // Zero out embeddings for 'no card'
         embs = embs * valid.unsqueeze(1); // [B*num_cards,MODEL_DIM]
-        //DEBUG_NONE("zero out");
-
         
         // Reshape and sum across cards
         embs = embs.reshape({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
@@ -135,7 +120,14 @@ struct DeepCFRModelImpl : torch::nn::Module {
     }
 
     // Forward pass
-    torch::Tensor forward(std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
+    torch::Tensor forward(
+        torch::Tensor hand, 
+        torch::Tensor flop, 
+        torch::Tensor turn, 
+        torch::Tensor river, 
+        torch::Tensor bet_fracs, 
+        torch::Tensor bet_status
+    ) {
         /*
         Parameters:
             cards: std::vector<torch::Tensor> of size n_card_types
@@ -144,40 +136,21 @@ struct DeepCFRModelImpl : torch::nn::Module {
             bet_status: torch::Tensor of shape [N, bet_input_size / 2]
         */
 
-        //DEBUG_NONE("Entering DeepCFRModelImpl::forward");
-        // Add checks for tensor shapes and types
-        for (int i = 0; i < 4; ++i) {
-            if (!cards[i].defined()) {
-                throw std::runtime_error("Card tensor " + std::to_string(i) + " is not defined");
-            }
-            //DEBUG_NONE("Card " << i << " shape: " << cards[i].sizes());
-        }
-        if (!bet_fracs.defined() || !bet_status.defined()) {
-            throw std::runtime_error("bet_fracs or bet_status is not defined");
-        }
-        //DEBUG_NONE("bet_fracs shape: " << bet_fracs.sizes());
-        //DEBUG_NONE("bet_status shape: " << bet_status.sizes());
-
         // 1. Card Branch
-        std::vector<torch::Tensor> card_embs;
-        int64_t n_card_types = card_embeddings->size();
-        for(int64_t i = 0; i < n_card_types; ++i){
-            //DEBUG_NONE(i);
-            // Retrieve the i-th CardEmbedding module
-            auto embedding_module = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(i));
-            if (!embedding_module){
-                //DEBUG_NONE("moduel != cardembeddingimpl");
-                throw std::runtime_error("Module is not of type CardEmbeddingImpl");
-            }
-            // Forward pass through CardEmbedding
-            auto card_emb = embedding_module->forward(cards[i]); // [N,MODEL_DIM]
-            card_embs.push_back(card_emb);
-            //DEBUG_NONE("cardembed done");
-        }
+        torch::Tensor card_embs_cat;
+        auto hand_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(0));
+        auto flop_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
+        auto turn_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(2));
+        auto river_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(3));
+
+        torch::Tensor hand_emb = hand_embed->forward(hand);
+        torch::Tensor flop_emb = flop_embed->forward(flop);
+        torch::Tensor turn_emb = turn_embed->forward(turn);
+        torch::Tensor river_emb = river_embed->forward(river);
+
         // Concatenate embeddings from all card groups
-        auto card_embs_cat = torch::cat(card_embs, /*dim=*/1); // [N,MODEL_MODEL_DIM* n_card_types]
-        //DEBUG_NONE("cardconcat");
-        
+        card_embs_cat = torch::cat({hand_emb, flop_emb, turn_emb, river_emb}, /*dim=*/1); // [N,MODEL_MODEL_DIM * n_card_types]
+
         // Pass through card linear layers with ReLU activations
         auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
         x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
@@ -192,9 +165,11 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Pass through bet linear layers with ReLU and residual connection
         // Inside the forward function, just before the Bet Branch
-        //DEBUG_NONE("bet_feats shape: " << bet_feats.sizes());
-        //DEBUG_NONE("bet1 weight shape: " << bet1->weight.sizes());
-        //DEBUG_NONE("bet1 bias shape: " << bet1->bias.sizes());
+        /*
+        DEBUG_NONE("bet_feats shape: " << bet_feats.sizes());
+        DEBUG_NONE("bet1 weight shape: " << bet1->weight.sizes());
+        DEBUG_NONE("bet1 bias shape: " << bet1->bias.sizes());
+        */
         auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
         y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
         //DEBUG_NONE("bet12 complete");
@@ -208,7 +183,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
-        DEBUG_INFO("act head complete");
+        //DEBUG_INFO("act head complete");
         //std::cout << "forward complete" << std::endl;
         return output;
     }
@@ -223,14 +198,28 @@ TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRMod
 void* create_deep_cfr_model() {
     return new DeepCFRModel;
 }
-
-torch::Tensor deep_cfr_model_forward(void* model_ptr, std::array<torch::Tensor, 4> cards, torch::Tensor bet_fracs, torch::Tensor bet_status) {
+torch::Tensor deep_cfr_model_forward(
+    void* model_ptr, 
+    torch::Tensor hands, 
+    torch::Tensor flops, 
+    torch::Tensor turns, 
+    torch::Tensor rivers, 
+    torch::Tensor bet_fracs, 
+    torch::Tensor bet_status
+) {
     if (model_ptr == nullptr) {
+        DEBUG_NONE("got null ptr");
         throw std::invalid_argument("Model pointer is null.");
     }
+    //auto start_forward = std::chrono::high_resolution_clock::now();
     DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
-    return (*model)->forward(cards, bet_fracs, bet_status); // Corrected line
+    auto logits = (*model)->forward(hands, flops, turns, rivers, bet_fracs, bet_status); // Corrected line
+    //auto end_forward = std::chrono::high_resolution_clock::now();
+    //auto duration_forward = std::chrono::duration_cast<std::chrono::microseconds>(end_forward - start_forward);
+    //DEBUG_NONE("Forward pass time: " << duration_forward.count() << " us");
+    return logits;
 }
+
 
 // Factory function to delete a DeepCFRModel instance
 void delete_deep_cfr_model(void* model_ptr) {
@@ -294,7 +283,6 @@ void create_batch(const std::array<torch::Tensor, 4>& cards_template, const torc
     new_bet_status_shape[0] = batch_size;
     batched_bet_status = torch::zeros(new_bet_status_shape, bet_status_template.options());
 }
-
 void profile_net() {
     // Define model parameters
     int64_t n_card_types = 4;
@@ -320,19 +308,33 @@ void profile_net() {
     torch::Tensor bet_status = torch::zeros({N,bet_input_size}, torch::kInt64);
 
     // Measure average model forward call time over 1000 calls with original batch size
-    int num_calls = 13260;
+    int num_calls = 1000;
     std::cout << "calling" << std::endl;    
     auto start = std::chrono::high_resolution_clock::now();
 
+    torch::NoGradGuard no_grad;
     for (int i = 0; i < num_calls; ++i) {
-        torch::Tensor output = model->forward(cards, bet_fracs, bet_status);
+        torch::Tensor output = model->forward(cards[0], cards[1], cards[2], cards[3], bet_fracs, bet_status);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
-    std::cout << "Total forward call time over " << num_calls << " calls: "
-                << duration.count() << " microseconds" << std::endl;
+    std::cout << "Total forward call time no_grad over " << num_calls << " calls: "
+                << duration.count() / num_calls << " microseconds" << std::endl;
+
+    std::cout << "calling" << std::endl;    
+    start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < num_calls; ++i) {
+        torch::Tensor output = model->forward(cards[0], cards[1], cards[2], cards[3], bet_fracs, bet_status);
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+
+    std::cout << "Total forward call time with_grad over " << num_calls << " calls: "
+                << duration.count() / num_calls << " microseconds" << std::endl;
 
     // Now measure the average time of batched inference over 30 calls
     int batch_num_calls = 30;
@@ -347,12 +349,12 @@ void profile_net() {
     create_batch(cards, bet_fracs, bet_status, batch_size, batched_cards, batched_bet_fracs, batched_bet_status);
 
     // Warm-up call to ensure any lazy initialization is done
-    model->forward(batched_cards, batched_bet_fracs, batched_bet_status);
+    model->forward(batched_cards[0], batched_cards[1], batched_cards[2], batched_cards[3], batched_bet_fracs, batched_bet_status);
 
     for (int i = 0; i < batch_num_calls; ++i) {
         auto batch_start = std::chrono::high_resolution_clock::now();
 
-        torch::Tensor output = model->forward(batched_cards, batched_bet_fracs, batched_bet_status);
+        torch::Tensor output = model->forward(batched_cards[0], batched_cards[1], batched_cards[2], batched_cards[3], batched_bet_fracs, batched_bet_status);
 
         auto batch_end = std::chrono::high_resolution_clock::now();
 
@@ -366,4 +368,50 @@ void profile_net() {
     std::cout << "Average batched forward call time over " << batch_num_calls << " calls: "
                 << batch_avg_time << " microseconds" << std::endl;
 
+}
+int prof() {
+    profile_net();
+    torch::jit::script::Module model = torch::jit::load("/Users/minjunes/haetae/jit_compiled_model.pt");
+    
+    // Create dummy input data for a single batch
+    int64_t N = 1; // Batch size
+    torch::Tensor hand = torch::randint(0, 52, {N, 2}, torch::kInt64);
+    torch::Tensor flop = torch::randint(0, 52, {N, 3}, torch::kInt64);
+    torch::Tensor turn = torch::randint(0, 52, {N, 1}, torch::kInt64);
+    torch::Tensor river = torch::randint(0, 52, {N, 1}, torch::kInt64);
+    
+    int64_t nrounds = 4;
+    int64_t bet_input_size = (MAX_ROUND_BETS * NUM_PLAYERS * 4);
+    torch::Tensor bet_fracs = torch::rand({N, bet_input_size});
+    torch::Tensor bet_status = torch::randint(0, 2, {N, bet_input_size}, torch::kInt64);
+
+    // Create a vector of inputs
+    std::vector<torch::jit::IValue> inputs;
+    inputs.push_back(hand);
+    inputs.push_back(flop);
+    inputs.push_back(turn);
+    inputs.push_back(river);
+    inputs.push_back(bet_fracs);
+    inputs.push_back(bet_status);
+
+    // Forward pass
+    int num_calls = 1000;
+    std::cout << "calling" << std::endl;    
+    torch::NoGradGuard no_grad;
+    auto start = std::chrono::high_resolution_clock::now();
+    for (size_t _ = 0; _ < num_calls; ++_) {
+        if (_ == 1) start = std::chrono::high_resolution_clock::now();
+        torch::Tensor output = model.forward(inputs).toTensor();
+    }
+
+    // torch.jit is 156 microseconds
+    // normal forward is 79 microseconds
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+
+    std::cout << "Total forward call time no_grad over " << num_calls << " calls: "
+                << duration.count() / (num_calls-1) << " microseconds" << std::endl;
+
+    return 0;
 }
