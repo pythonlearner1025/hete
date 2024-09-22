@@ -164,7 +164,7 @@ void update_tensors(
 }
 class ObjectPool {
 private:
-    std::vector<PokerEngine> engine_pool;
+    std::vector<std::unique_ptr<PokerEngine>> engine_pool;
     std::vector<bool> engine_in_use;
     
     // Store the initialization parameters
@@ -197,32 +197,21 @@ public:
         // Initialize the engine pool
         engine_pool.reserve(pool_size);
         for (size_t i = 0; i < pool_size; ++i) {
-            engine_pool.emplace_back(
+            engine_pool.emplace_back(std::make_unique<PokerEngine>(
                 starting_stacks,
                 antes,
                 starting_actor,
                 small_bet,
                 big_bet,
                 false  // is_limit
-            );
+            ));
         }
 
     }
 
     PokerEngine* get_engine() {
-        if (idx < pool_size) {
-            engine_pool[idx].reset(
-                starting_stacks,
-                antes,
-                starting_actor,
-                small_bet,
-                big_bet,
-                false  // is_limit
-            );
-            return &engine_pool[idx++];
-        }
-        // If all engines are in use, create a new one
-        engine_pool.emplace_back(
+    if (idx < pool_size) {
+        engine_pool[idx]->reset(
             starting_stacks,
             antes,
             starting_actor,
@@ -230,11 +219,21 @@ public:
             big_bet,
             false  // is_limit
         );
-        idx++;
-        pool_size++;
-        //engine_in_use.push_back(true);
-        return &engine_pool.back();
+        return engine_pool[idx++].get();
     }
+    // If all engines are in use, create a new one
+    engine_pool.emplace_back(std::make_unique<PokerEngine>(
+        starting_stacks,
+        antes,
+        starting_actor,
+        small_bet,
+        big_bet,
+        false  // is_limit
+    ));
+    idx++;
+    pool_size++;
+    return engine_pool.back().get();
+}
 
     void release_engine(PokerEngine* engine) {
         // handle logic properly later
@@ -403,9 +402,10 @@ void iterative_traverse(
                 // For each legal action, proceed to the next state
                 for (size_t a = 0; a < NUM_ACTIONS; ++a) {
                     if (!is_illegal[a]) {
-                        PokerEngine new_engine = engine->copy();
-                        take_action(&new_engine, player, a);
-                        stack.push({depth + 1, &new_engine, adv_ptr, static_cast<int>(a)});
+                        PokerEngine* new_engine = object_pool.get_engine();
+                        *new_engine = engine->copy(); 
+                        take_action(new_engine, player, a);
+                        stack.push({depth + 1, new_engine, adv_ptr, static_cast<int>(a)});
                     }
                 }
             }
@@ -544,20 +544,12 @@ int main() {
         init_player_nets[i] = create_deep_cfr_model();
     }
 
-    
     total_nets.push_back(init_player_nets);
     global_advs.resize(MAX_SIZE);
 
     // init concurrency
     unsigned int num_threads = std::thread::hardware_concurrency();
-    num_threads=1;
 
-    std::vector<std::array<void*, NUM_PLAYERS>> thread_nets(num_threads);
-    for (unsigned int thread_id = 0; thread_id < num_threads; ++thread_id) {
-        for (size_t i = 0; i < NUM_PLAYERS; ++i) {
-            thread_nets[thread_id][i] = create_deep_cfr_model();
-        }
-    }
     int traversals_per_thread = NUM_TRAVERSALS / num_threads;
     int remaining_traversals = NUM_TRAVERSALS % num_threads;
     DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
@@ -604,8 +596,8 @@ int main() {
             // In the main function, modify the thread creation part:
             for(unsigned int thread_id = 0; thread_id < num_threads; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
-                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &thread_nets]() {
-                    thread_func(traversals_to_run, thread_id, player, cfr_iter, thread_nets[thread_id]);
+                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &player_nets]() {
+                    thread_func(traversals_to_run, thread_id, player, cfr_iter, player_nets);
                 });
             }
             // Wait for all threads to finish
@@ -615,6 +607,9 @@ int main() {
                 }
             }
             void* player_model = new_player_nets[player];
+            if (player_model == nullptr) {
+                player_model = create_deep_cfr_model();
+            }
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << global_index.load());
             // todo train
