@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cassert>
 #include "model.h"
+#include <unordered_map>
 
 // ========================
 // CardEmbedding Module
@@ -220,7 +221,6 @@ torch::Tensor deep_cfr_model_forward(
     return logits;
 }
 
-
 // Factory function to delete a DeepCFRModel instance
 void delete_deep_cfr_model(void* model_ptr) {
     if (model_ptr != nullptr) {
@@ -252,6 +252,39 @@ std::vector<torch::Tensor> get_model_parameters(void* model_ptr) {
     return params;
 }
 
+void save_model(void* model_ptr, const std::string& path) {
+    if (model_ptr == nullptr) {
+        throw std::invalid_argument("Model pointer is null.");
+    }
+    DeepCFRModel* model = static_cast<DeepCFRModel*>(model_ptr);
+
+    // Create directories if they don't exist
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+
+    try {
+        torch::save(*model, path);
+        std::cout << "Model saved successfully to " << path << std::endl;
+    } catch (const c10::Error& e) {
+        std::cerr << "Error saving the model: " << e.what() << std::endl;
+        throw;
+    }
+}
+
+void* load_model(const std::string& path) {
+    if (!std::filesystem::exists(path)) {
+        throw std::runtime_error("Model file does not exist: " + path);
+    }
+
+    try {
+        DeepCFRModel* loaded_model = new DeepCFRModel();
+        torch::load(*loaded_model, path);
+        std::cout << "Model loaded successfully from " << path << std::endl;
+        return loaded_model;
+    } catch (const c10::Error& e) {
+        std::cerr << "Error loading the model: " << e.what() << std::endl;
+        throw;
+    }
+}
 /*
     BATCH IS FASTER
 
