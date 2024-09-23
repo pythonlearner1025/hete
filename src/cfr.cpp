@@ -93,11 +93,13 @@ void get_state(
         state->bet_status[i] = history.first[i];
         state->bet_fracs[i] = history.second[i];
     }
+
     // Assign hand, flop, turn, and river
     state->hand = hand;
     for (int i = 0; i < 3; ++i) {
         state->flop[i] = board[i];
     }
+
     state->turn[0] = board[3];
     state->river[0] = board[4];
 }
@@ -162,6 +164,7 @@ void update_tensors(
 
     //DEBUG_NONE("update_tensors completed successfully");
 }
+
 class ObjectPool {
 private:
     std::vector<std::unique_ptr<PokerEngine>> engine_pool;
@@ -282,11 +285,32 @@ struct Advantage {
         state(state_),
         depth(depth_),
         unprocessed_children(num_children)
-    {}
+    {
+
+    }
 };
 
+void print_strategy(const std::array<double, NUM_ACTIONS>& strat, int chosen_act) {
+    const std::array<std::string, NUM_ACTIONS> action_names = {"Fold", "Check/Call", "Bet/Raise"};
+    
+    std::cout << "\nStrategy probabilities:\n";
+    std::cout << std::string(30, '-') << "\n";
+    std::cout << std::setw(15) << "Action" << " | " << std::setw(10) << "Probability" << "\n";
+    std::cout << std::string(30, '-') << "\n";
+    
+    for (size_t i = 0; i < NUM_ACTIONS; ++i) {
+        std::cout << std::setw(15) << action_names[i] << " | " 
+                  << std::setw(10) << std::fixed << std::setprecision(4) << strat[i] << "\n";
+    }
+    
+    std::cout << std::string(30, '-') << "\n";
+    std::cout << std::setw(15) << "Chosen action:" << std::to_string(chosen_act) << "\n";
+    std::cout << std::string(30, '-') << "\n";
+}
 
 // Adjusted iterative_traverse function
+// past: 0.3 iter / sec
+// now: 
 void iterative_traverse(
     int thread_id,
     int player,
@@ -373,9 +397,6 @@ void iterative_traverse(
                 auto state = std::make_shared<State>();
                 get_state(*engine, state.get(), player);
 
-                std::array<double, NUM_ACTIONS> strat{0.0};
-                std::array<double, NUM_ACTIONS> values;
-                values.fill(NULL_VALUE);
                 std::array<bool, NUM_ACTIONS> is_illegal{false};
 
                 // Determine legal actions
@@ -387,8 +408,8 @@ void iterative_traverse(
 
                 // Create a new Advantage object
                 auto adv_ptr = std::make_shared<Advantage>(
-                    values,
-                    strat,
+                    std::array<double, NUM_ACTIONS>{},  // values (default initialized to 0.0)
+                    std::array<double, NUM_ACTIONS>{}, 
                     is_illegal,
                     parent_advantage,
                     parent_action,
@@ -417,6 +438,11 @@ void iterative_traverse(
                 update_tensors(state.get(), &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
 
                 void* net_ptr = nets[actor];
+                if (net_ptr == nullptr) {
+                    for (size_t i=0; i< NUM_PLAYERS; ++i) DEBUG_NONE("player " << i << " = " << nets[i]);
+                    DEBUG_NONE("net ptr is null");
+                    throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
+                }
                 torch::Tensor logits = deep_cfr_model_forward(net_ptr, hands, flops, turns, rivers, bet_fracs, bet_status);
                 std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
@@ -425,6 +451,7 @@ void iterative_traverse(
                     action_index = (action_index - 1 + NUM_ACTIONS) % NUM_ACTIONS;
                 }
 
+                //print_strategy(strat, action_index);
                 take_action(engine, actor, action_index);
                 stack.push({depth + 1, engine, parent_advantage, parent_action});
             }
@@ -449,6 +476,7 @@ void iterative_traverse(
             size_t batch_size = std::min(TRAIN_BS, all_advs.size() - advs_idx);
 
             for (size_t i = 0; i < batch_size; ++i) {
+                //DEBUG_NONE("udt");
                 auto& adv = all_advs[advs_idx];
                 update_tensors(
                     adv->state.get(),
@@ -464,6 +492,7 @@ void iterative_traverse(
             }
 
             // Perform inference to get strategies
+            //DEBUG_NONE("fwd...");
             torch::Tensor logits = deep_cfr_model_forward(
                 nets[player],
                 batched_hands.slice(0, 0, batch_size),
@@ -473,12 +502,14 @@ void iterative_traverse(
                 batched_fracs.slice(0, 0, batch_size),
                 batched_status.slice(0, 0, batch_size)
             );
+            //DEBUG_NONE("fwd");
 
             torch::Tensor regrets = regret_match_batched(logits);
             auto regrets_accessor = regrets.accessor<float, 2>();
 
             // Update strategies in all_advs
             for (size_t i = 0; i < batch_size; ++i) {
+                //DEBUG_NONE("ups");
                 auto& adv = all_advs[advs_idx - batch_size + i];
                 for (size_t j = 0; j < NUM_ACTIONS; ++j) {
                     adv->strat[j] = regrets_accessor[i][j];
@@ -520,6 +551,7 @@ void iterative_traverse(
 
             // Backpropagate to parent
             if (auto parent_adv_ptr = terminal_adv->parent.lock()) {
+                if (parent_adv_ptr == nullptr || parent_adv_ptr == terminal_adv) continue;
                 parent_adv_ptr->values[terminal_adv->parent_action] = ev;
                 parent_adv_ptr->unprocessed_children--;
 
@@ -538,20 +570,22 @@ void iterative_traverse(
 // around 10,000 training iter steps needed per iter
 // the thing is CPU is faster than M3 Max chip
 int main() {
-    std::vector<std::array<void*, NUM_PLAYERS>> total_nets;
-    std::array<void*, NUM_PLAYERS> init_player_nets{};
-    for (size_t i=0; i<NUM_PLAYERS; ++i) {
-        init_player_nets[i] = create_deep_cfr_model();
+    // each thread gets a copy of latest model
+    // we just need an array
+    std::vector<std::array<void*, NUM_PLAYERS>> nets(NUM_THREADS);
+    DEBUG_NONE("NUM_PLAYERS = " << NUM_PLAYERS);
+    for (size_t i=0; i<NUM_THREADS; ++i) {
+        for (size_t j=0; j<NUM_PLAYERS; ++j) {
+            nets[i][j] = create_deep_cfr_model();
+            if (nets[i][j] == nullptr) DEBUG_NONE("null ptr at init");
+            else DEBUG_NONE("player " << j << " = " << nets[i][j]);
+        }
     }
-
-    total_nets.push_back(init_player_nets);
+    
     global_advs.resize(MAX_SIZE);
 
-    // init concurrency
-    unsigned int num_threads = std::thread::hardware_concurrency();
-
-    int traversals_per_thread = NUM_TRAVERSALS / num_threads;
-    int remaining_traversals = NUM_TRAVERSALS % num_threads;
+    int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;
+    int remaining_traversals = NUM_TRAVERSALS % NUM_THREADS;
     DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
     DEBUG_NONE("Remaining traversals: " << remaining_traversals);
     std::array<double, NUM_PLAYERS> starting_stacks{};
@@ -565,8 +599,10 @@ int main() {
     int starting_actor = 0;
 
     // Modify the thread_func to use iterative_traverse
-    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<void*, NUM_PLAYERS> nets) {
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<void*, NUM_PLAYERS>& nets) {
         try {
+            //DEBUG_NONE("inthreadfun");
+            //for (size_t i=0; i< NUM_PLAYERS; ++i) DEBUG_NONE("player " << i << " = " << nets[i]);
             torch::NoGradGuard guard;
             iterative_traverse(
                 thread_id,
@@ -587,28 +623,42 @@ int main() {
     };
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
-        std::array<void*, NUM_PLAYERS> player_nets = total_nets[total_nets.size()-1];
-        std::array<void*, NUM_PLAYERS> new_player_nets{create_deep_cfr_model()};
+        // nets to train
+        std::array<void*, NUM_PLAYERS> fresh_nets;
+        for (int player = 0; player < NUM_PLAYERS; ++player) {
+            fresh_nets[player] = create_deep_cfr_model();
+        }
+
         for (int player=0; player<NUM_PLAYERS; ++player) {
             // spawn threads
             std::vector<std::thread> threads;
-            DEBUG_NONE("num_threads = " << num_threads);
+            DEBUG_NONE("num_threads = " << NUM_THREADS);
             // In the main function, modify the thread creation part:
-            for(unsigned int thread_id = 0; thread_id < num_threads; ++thread_id) {
+            // Modify the thread creation part
+            for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
-                threads.emplace_back([&thread_func, traversals_to_run, thread_id, player, cfr_iter, &player_nets]() {
-                    thread_func(traversals_to_run, thread_id, player, cfr_iter, player_nets);
-                });
-            }
+                
+                // Create a reference to nets[thread_id]
+                std::array<void*, NUM_PLAYERS>& thread_nets = nets[thread_id];
+                
+                // Capture thread_nets by reference
+                threads.emplace_back(
+                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, &thread_nets]() {
+                        thread_func(traversals_to_run, thread_id, player, cfr_iter, thread_nets);
+                    }
+                );
+            } 
             // Wait for all threads to finish
             for(auto& thread : threads) {
                 if(thread.joinable()) {
                     thread.join();
                 }
             }
-            void* player_model = new_player_nets[player];
-            if (player_model == nullptr) {
-                player_model = create_deep_cfr_model();
+
+            void* train_net = fresh_nets[player];
+            if (train_net == nullptr) {
+                DEBUG_NONE("train_net is nullptr why??");
+                train_net = create_deep_cfr_model();
             }
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << global_index.load());
@@ -661,14 +711,15 @@ int main() {
                 }
 
                 // train
-                torch::optim::Adam optimizer(get_model_parameters(player_model));
+                torch::autograd::GradMode::set_enabled(true);
+                torch::optim::Adam optimizer(get_model_parameters(train_net));
 
                 // maximum 50 million samples
                 for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
                     optimizer.zero_grad();
         
                     torch::Tensor pred = deep_cfr_model_forward(
-                        player_model, 
+                        train_net, 
                         batched_hands,
                         batched_flops,
                         batched_turns,
@@ -695,8 +746,16 @@ int main() {
                 }
             }
 
-            // todo eval - implement game sim in eval.cpp
             //double eval_mbb = evaluate(player_model, player);
+
+            // todo save nets
+            std::string save_path = "models/" + std::to_string(cfr_iter) + "/" + std::to_string(player) + "/model.pt";
+            save_model(train_net, save_path);
+
+            // todo replace nets with trained nets
+            for (size_t i=0; i<NUM_THREADS; ++i) {
+                nets[i][player] = load_model(save_path);
+            }
         }
     }
 }

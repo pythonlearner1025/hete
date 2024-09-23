@@ -5,6 +5,9 @@
 
 #include <torch/torch.h>
 #include <vector>
+#include <memory>
+#include <filesystem>
+#include <fstream>
 #include "../constants.h"
 #include "../debug.h"
 
@@ -26,6 +29,8 @@ torch::Tensor deep_cfr_model_forward(
 void delete_deep_cfr_model(void* model_ptr);
 void set_model_eval_mode(void* model_ptr); // If implemented
 std::vector<torch::Tensor> get_model_parameters(void* model_ptr);
+void save_model(void* model_ptr, const std::string& path);
+void* load_model(const std::string& path);
 
 // test fn
 void profile_net();
