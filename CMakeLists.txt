@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/home/minjunes/libtorch")
+set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
 find_package(Torch REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/OMPEval)

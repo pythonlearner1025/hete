@@ -36,8 +36,6 @@ torch::Tensor random_forward() {
 std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> global_index(0);
 const int MAX_SIZE = 40e6;
-
-
 constexpr double NULL_VALUE = -42.0;
 
 // Adjusted Advantage struct with smart pointers
@@ -90,7 +88,6 @@ struct Advantage {
         }
     }
 };
-
 
 void print_strategy(const std::array<double, NUM_ACTIONS>& strat, int chosen_act) {
     const std::array<std::string, NUM_ACTIONS> action_names = {"Fold", "Check/Call", "Bet/Raise"};
@@ -378,11 +375,7 @@ void profile_model(DeepCFRModel& model, int batch_size = 1000, int num_iteration
         std::cout << "CUDA is not available on this system." << std::endl;
     }
 }
-// more cfr traversal steps converges faster but is sample inefficient
-// 3000 cfr steps * 500 cfr iters converges same as 100,000 and 500 cfr iters
-// so estimate around ~1 million total steps budget
-// around 10,000 training iter steps needed per iter
-// the thing is CPU is faster than M3 Max chip
+
 int main() {
     //DeepCFRModel model;
     //profile_model(model, 1000, 100);
@@ -558,7 +551,7 @@ int main() {
                 }
             }
 
-            //double eval_mbb = evaluate(player_model, player);
+            double eval_mbb = evaluate(train_net, player);
 
             // todo save nets
             DEBUG_NONE("saving nets..");
@@ -586,4 +579,3 @@ int main() {
         }
     }
 }
-

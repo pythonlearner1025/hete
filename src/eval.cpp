@@ -4,7 +4,6 @@
 #include <bitset>
 #include <stdexcept>
 #include <iostream>
-#include "eval.h"
 #include <random>
 #include <numeric>
 
@@ -340,7 +339,7 @@ int get_lbr_act(
     std::array<std::array<int, 2>, NUM_PLAYERS> player_hands, 
     std::array<int, NUM_PLAYERS-1> opp_idxs,
     int player,
-    std::array<std::vector<State>, NUM_PLAYERS-1> opp_states, // list of each infoset opp saw before acting 
+    std::array<std::vector<State*>, NUM_PLAYERS-1> opp_states, // list of each infoset opp saw before acting 
     std::array<int, 52> deck_cards
 ) {
     std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> opp_ranges{}; 
@@ -417,7 +416,7 @@ int get_lbr_act(
                 for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
                     float curr_hand_prob = opp_ranges[i][j]; 
                     std::array<int, 2> opp_hand = card_lookup_table[j];
-                    update_tensor(&state, &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
+                    update_tensors(state, &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
                     torch::Tensor logits = policy_net->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
                     auto regrets = regret_match_batched(logits); 
                     auto regrets_a = regrets.accessor<float, 2>();
@@ -464,7 +463,7 @@ int get_lbr_act(
 
     // init original game state trackers
     State *state;
-    get_state(&engine, state, player);
+    get_state(engine, state, player);
 
     for (size_t a=2; a<NUM_ACTIONS; ++a) {
         DEBUG_INFO("calc act: " << a << " util");
@@ -486,7 +485,7 @@ int get_lbr_act(
         // get the player - player_index
         int last_bet_idx = 0;
         for (size_t j=MAX_ROUND_BETS*NUM_PLAYERS*4-1; j>=0; --j) {
-            if (state.bet_fracs[j] > 0.0) {
+            if (state->bet_fracs[j] > 0.0) {
                 last_bet_idx = j;
                 break;
             }
@@ -556,7 +555,6 @@ int get_lbr_act(
 
         // fold percent of opp if player takes action a
         double fp = 0.0;
-        int batch_idx = 0;
 
         // Initialize random engine
         std::random_device rd;
@@ -625,15 +623,15 @@ int get_lbr_act(
         auto batched_fracs = init_batched_fracs(MC_BS);
         auto batched_status = init_batched_status(MC_BS);
 
-        size_t num_repeats = (all_advs.size() + TRAIN_BS - 1) / TRAIN_BS;
-        size_t batch_idx = 0;
+        size_t num_repeats = (sampled_opp_hand_indices.size() + TRAIN_BS - 1) / TRAIN_BS;
+        int batch_idx = 0;
 
         for (size_t r = 0; r < num_repeats; ++r) {
-            size_t batch_size = std::min(MC_BS, sampled_opp_hand_indices.count()-batch_idx);
+            size_t batch_size = std::min(MC_BS, sampled_opp_hand_indices.size()-batch_idx);
             for (size_t i = 0; i < batch_size; ++i) {
-                int [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx];
+                auto [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx];
                 State* opp_state;
-                get_state(&engine, opp_state, opp_idx);
+                get_state(engine, opp_state, opp_idx);
                 std::array<int, 2> cf_hand = card_lookup_table[hand_idx];
                 update_tensors(
                     opp_state,
@@ -644,7 +642,7 @@ int get_lbr_act(
                     &batched_fracs,
                     &batched_status
                 );
-                auto hand_a = batched_hands->accessor<int32_t, 2>();
+                auto hand_a = batched_hands.accessor<int32_t, 2>();
                 hand_a[i][0] = cf_hand[0];
                 hand_a[i][1] = cf_hand[1];
                 batch_idx++;
@@ -663,7 +661,7 @@ int get_lbr_act(
             auto regrets_a = regrets.accessor<float, 2>();
 
             for (size_t i = 0; i < batch_size; ++i) {
-                int [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx-batch_size+i];
+                auto [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx-batch_size+i];
                 double opp_hand_prob = cf_opp_ranges[opp_idx][hand_idx];
                 fp += opp_hand_prob * (1 - regrets_a[i][0]);
                 cf_opp_ranges[opp_idx][hand_idx] = opp_hand_prob * (1 - regrets_a[i][0]);
@@ -724,7 +722,7 @@ double evaluate(
 
     for (size_t i = 0; i < EVAL_MC_SAMPLES; ++i) {
         // init history
-        std::array<std::vector<State>, NUM_PLAYERS> all_histories{};
+        std::array<std::vector<State*>, NUM_PLAYERS> all_histories{};
         for (auto& history : all_histories) {
             history.reserve(MAX_ROUND_BETS * 4);
         }
@@ -747,39 +745,39 @@ double evaluate(
             if (engine.turn() == player) {
                 DEBUG_INFO("Player's turn");
                 State* state;
-                get_state(&engine, state);
+                get_state(engine, state, player);
                 update_tensors(state, &hands, &flops, &turns, &rivers, &fracs, &status);
                 auto logits = policy_net->forward(hands, flops, turns, rivers, fracs, status);
                 auto regrets = regret_match_batched(logits);
                 auto regrets_a = regrets.accessor<float, 2>();
-                std::array<NUM_ACTIONS, float> strats{};
+                std::array<float, NUM_ACTIONS> strats{};
                 for (size_t s=0;s<NUM_ACTIONS;++s) {
-                    strats[s] = regrets[0][s];
+                    strats[s] = regrets_a[0][s];
                 }
                 int act = 0;
                 double max_prob = 0.0;
                 for (size_t a=0; a<NUM_ACTIONS; ++a) {
-                    if (strat[a] > max_prob) {
-                        max_prob = strat[a];
+                    if (strats[a] > max_prob) {
+                        max_prob = strats[a];
                         act = a;
                     }
                 }
                 DEBUG_INFO("Player sampled act: " << act);
                   // Verify and adjust action if necessary
-                while (!verify_action(engine, player, act)) {
+                while (!verify_action(&engine, player, act)) {
                     act = (act - 1) % NUM_ACTIONS;
                 }
                 // Take action
-                take_action(engine, player, act);
+                take_action(&engine, player, act);
                 DEBUG_INFO("I selected action: " << act);
             } else {
                 int opp = engine.turn();
                 DEBUG_INFO("Opp " << opp << " turn");
                 State* state;
-                get_state(&engine, state); 
+                get_state(engine, state, player); 
                 all_histories[opp].push_back(state);
 
-                std::array<std::vector<Infoset>, NUM_PLAYERS-1> opp_histories{};
+                std::array<std::vector<State*>, NUM_PLAYERS-1> opp_histories{};
                 std::array<int, NUM_PLAYERS-1> opp_idxs{};
                 for (size_t i=0; i<NUM_PLAYERS;++i) {
                     // opp is 0
@@ -811,11 +809,11 @@ double evaluate(
 
                 DEBUG_INFO("Lbr chosen act: " << act);
 
-                while (!verify_action(engine, opp, act)) {
+                while (!verify_action(&engine, opp, act)) {
                     act = (act - 1) % NUM_ACTIONS;
                 }
                 // Take action
-                take_action(engine, opp, act);
+                take_action(&engine, opp, act);
                 DEBUG_INFO("Opp selected action: " << act); 
             }
         }
