@@ -3,13 +3,13 @@
 
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
-constexpr size_t NUM_TRAVERSALS = 30;
+constexpr size_t NUM_TRAVERSALS = 10;
 constexpr size_t MAX_ADVS = 1e8; // Adjust this based on your expected maximum number of advantages
 constexpr size_t NUM_ACTIONS = 5;
 constexpr size_t MAX_PLAYERS = 6;
 constexpr size_t CFR_ITERS = 300;
 constexpr size_t POOL_SIZE = 1e4;
-constexpr size_t NUM_THREADS = 4;
+constexpr size_t NUM_THREADS = 1;
 
 // engine
 constexpr int MAX_ROUND_BETS = 3;

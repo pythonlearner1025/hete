@@ -14,8 +14,6 @@
 #include <sstream> // For std::stringstream
 #include <memory>
 
-struct rusage measure_usage;
-
 //std::atomic<int> total_advantages(0);
 // Helper function for getting current timestamp
 std::string get_timestamp() {
@@ -429,7 +427,6 @@ void iterative_traverse(
                 }
             }
         }
-
 
         while (!terminal_advs.empty()) {
             auto terminal_adv = terminal_advs.top();
