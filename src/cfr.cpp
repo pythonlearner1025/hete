@@ -74,7 +74,7 @@ torch::Tensor init_batched_advs(int BS) {
 
 torch::Tensor init_batched_iters(int BS) {
     std::vector<int64_t> batched_iters_shape = {BS, 1};
-    return torch::zeros(batched_iters_shape, torch::kFloat);
+    return torch::zeros(batched_iters_shape, torch::kInt);
 }
 
 void get_state(
@@ -112,69 +112,42 @@ void update_tensors(
     torch::Tensor* bet_status,
     int batch = 0
 ) {
-    // Check if all pointers are valid
-    if (!S || !hand || !flop || !turn || !river || !bet_fracs || !bet_status) {
-        DEBUG_NONE("Null pointer detected in update_tensors");
-        DEBUG_NONE("S: " << (void*)S);
-        DEBUG_NONE("hand: " << (void*)hand);
-        DEBUG_NONE("flop: " << (void*)flop);
-        DEBUG_NONE("turn: " << (void*)turn);
-        DEBUG_NONE("river: " << (void*)river);
-        DEBUG_NONE("bet_fracs: " << (void*)bet_fracs);
-        DEBUG_NONE("bet_status: " << (void*)bet_status);
-        throw std::runtime_error("Null pointer in update_tensors");
-    }
-
-    if (batch < 0 || batch >= hand->size(0)) {
-        DEBUG_NONE("Invalid index passed to update_tensors");
-        throw std::runtime_error("Invalid index passed to update_tensors");
-    }
-
-    // Get data pointers
-    int32_t* hand_ptr = hand->data_ptr<int32_t>();
-    int32_t* flop_ptr = flop->data_ptr<int32_t>();
-    int32_t* turn_ptr = turn->data_ptr<int32_t>();
-    int32_t* river_ptr = river->data_ptr<int32_t>();
-    float* bet_fracs_ptr = bet_fracs->data_ptr<float>();
-    float* bet_status_ptr = bet_status->data_ptr<float>();
-
-    // Calculate offsets
-    int64_t hand_offset = batch * hand->size(1);
-    int64_t flop_offset = batch * flop->size(1);
-    int64_t turn_offset = batch * turn->size(1);
-    int64_t river_offset = batch * river->size(1);
-    int64_t bet_fracs_offset = batch * bet_fracs->size(1);
-    int64_t bet_status_offset = batch * bet_status->size(1);
+    // Get accessors
+    auto hand_a = hand->accessor<int32_t, 2>();
+    auto flop_a = flop->accessor<int32_t, 2>();
+    auto turn_a = turn->accessor<int32_t, 2>();
+    auto river_a = river->accessor<int32_t, 2>();
+    auto bet_fracs_a = bet_fracs->accessor<float, 2>();
+    auto bet_status_a = bet_status->accessor<float, 2>();
 
     // Update hand cards (first two cards)
     for (int i = 0; i < 2; ++i) {
-        hand_ptr[hand_offset + i] = S->hand[i];
+        hand_a[batch][i] = S->hand[i];
     }
 
     // Update flop cards (next three cards)
     for (int i = 0; i < 3; ++i) {
-        flop_ptr[flop_offset + i] = S->flop[i];
+        flop_a[batch][i] = S->flop[i];
     }
 
     // Update turn card
-    turn_ptr[turn_offset] = S->turn[0];
+    turn_a[batch][0] = S->turn[0];
 
     // Update river card
-    river_ptr[river_offset] = S->river[0];
+    river_a[batch][0] = S->river[0];
 
     // Update bet fractions
     for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_ptr[bet_fracs_offset + i] = S->bet_fracs[i];
+        bet_fracs_a[batch][i] = S->bet_fracs[i];
     }
 
     // Update bet status
     for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_status_ptr[bet_status_offset + i] = S->bet_status[i];
+        bet_status_a[batch][i] = S->bet_status[i];
     }
 }
 
 constexpr double NULL_VALUE = -42.0;
-
 
 // Adjusted Advantage struct with smart pointers
 struct Advantage {
@@ -248,7 +221,6 @@ void print_strategy(const std::array<double, NUM_ACTIONS>& strat, int chosen_act
 
 // Adjusted iterative_traverse function
 // past: 0.3 iter / sec
-// now: 
 
 // so one possible cause for use-after-free is if in update_tensor
 // instead of updating the memory location at each batch_tensor,
@@ -409,23 +381,21 @@ void iterative_traverse(
             );
 
             torch::Tensor regrets = regret_match_batched(logits);
-            float* regrets_pointer = regrets.data_ptr<float>();
+            auto regrets_a = regrets.accessor<float, 2>();
 
-            // Update strategies in all_advs
+            // Then update the loop that uses regrets:
             for (size_t i = 0; i < batch_size; ++i) {
-                int32_t batch_offset = i * regrets.size(1);
                 auto& adv = all_advs[advs_idx-batch_size+i];
 
-                // Check if adv is a valid pointer
                 if (!adv) {
                     DEBUG_NONE("Error: Null pointer encountered at index " << advs_idx);
-                    continue;  // Skip this iteration
+                    continue;
                 }
                 for (size_t j = 0; j < NUM_ACTIONS; ++j) {
-                    float regret = regrets_pointer[batch_offset + j];
+                    float regret = regrets_a[i][j];
                     adv->strat[j] = regret;
                 }
-            }
+            } 
         }
 
         while (!terminal_advs.empty()) {
@@ -470,12 +440,62 @@ void iterative_traverse(
     }
 }
 
+void profile_model(DeepCFRModel& model, int batch_size = 1000, int num_iterations = 100) {
+    // Prepare input tensors
+    auto hands = init_batched_hands(batch_size);
+    auto flops = init_batched_flops(batch_size);
+    auto turns = init_batched_turns(batch_size);
+    auto rivers = init_batched_rivers(batch_size);
+    auto bet_fracs = init_batched_fracs(batch_size);
+    auto bet_status = init_batched_status(batch_size);
+
+    // Function to run inference and measure time
+    auto run_inference = [&](torch::Device device) {
+        model->to(device);
+        hands = hands.to(device);
+        flops = flops.to(device);
+        turns = turns.to(device);
+        rivers = rivers.to(device);
+        bet_fracs = bet_fracs.to(device);
+        bet_status = bet_status.to(device);
+
+        torch::NoGradGuard no_grad;
+        
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < num_iterations; ++i) {
+            auto output = model->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double, std::milli> elapsed = end - start;
+        return elapsed.count() / num_iterations;
+    };
+
+    // Profile CPU
+    double cpu_time = run_inference(torch::kCPU);
+    std::cout << "CPU average inference time: " << cpu_time << " ms" << std::endl;
+
+    // Profile CUDA if available
+    if (torch::cuda::is_available()) {
+        double cuda_time = run_inference(torch::kCUDA);
+        std::cout << "CUDA average inference time: " << cuda_time << " ms" << std::endl;
+        
+        // Calculate speedup
+        double speedup = cpu_time / cuda_time;
+        std::cout << "CUDA speedup: " << speedup << "x" << std::endl;
+    } else {
+        std::cout << "CUDA is not available on this system." << std::endl;
+    }
+}
 // more cfr traversal steps converges faster but is sample inefficient
 // 3000 cfr steps * 500 cfr iters converges same as 100,000 and 500 cfr iters
 // so estimate around ~1 million total steps budget
 // around 10,000 training iter steps needed per iter
 // the thing is CPU is faster than M3 Max chip
 int main() {
+    //DeepCFRModel model;
+    //profile_model(model, 1000, 100);
+    //exit(-1);
     //DeepCFRModel* model = new DeepCFRModel();
     // each thread gets a copy of latest model
     // we just need an array
@@ -583,8 +603,8 @@ int main() {
             auto batched_advs = init_batched_advs(TRAIN_BS);
             auto batched_iters = init_batched_iters(TRAIN_BS);
 
-            auto batched_advs_ptr = batched_advs.data_ptr<float>();
-            auto batched_iters_ptr = batched_iters.data_ptr<float>();
+            auto batched_advs_a = batched_advs.accessor<float, 2>();
+            auto batched_iters_a = batched_iters.accessor<int, 2>();
 
             for (int _ = 0; _ < batch_repeat; ++_) {
                 for (size_t i = 0; i < TRAIN_BS; ++i) {
@@ -604,10 +624,10 @@ int main() {
                     ); 
 
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs_ptr[i * NUM_ACTIONS + a] = training_advs[advs_idx].advantages[a];
+                        batched_advs_a[i][a] = training_advs[advs_idx].advantages[a];
                     }
                     int iteration = training_advs[advs_idx].iteration;
-                    batched_iters_ptr[i] = static_cast<float>(iteration);
+                    batched_iters_a[i][0] = static_cast<int>(iteration);
                     advs_idx++;
                 }
 
