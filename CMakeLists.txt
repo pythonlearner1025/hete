@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
+  set(CMAKE_BUILD_TYPE Debug)
 endif()
 
 set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
@@ -39,8 +39,13 @@ else()
   message(FATAL_ERROR "Unsupported operating system")
 endif()
 
-file(GLOB_RECURSE NON_MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/*.cpp" "${CMAKE_SOURCE_DIR}/src/*.cxx")
-file(GLOB_RECURSE MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/model/*.cpp" "${CMAKE_SOURCE_DIR}/src/model/*.cxx")
+file(GLOB_RECURSE NON_MODEL_SRCS 
+    "${CMAKE_SOURCE_DIR}/src/*.cpp" 
+    "${CMAKE_SOURCE_DIR}/src/*.cxx"
+)
+
+# Exclude files from the tests directory
+list(FILTER NON_MODEL_SRCS EXCLUDE REGEX "${CMAKE_SOURCE_DIR}/src/tests/.*")
 list(APPEND MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/model/model.h")
 set(ALL_SRCS ${NON_MODEL_SRCS} ${MODEL_SRCS})
 

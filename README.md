@@ -49,7 +49,7 @@ the lower the better
 
 # TODO
 
-- OMPEval lib/ompeval.a -> lib/libompeval.a
+- squash all multithreading bugs
 
 
 
