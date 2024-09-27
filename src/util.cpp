@@ -160,39 +160,27 @@ std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
 torch::Tensor regret_match_batched(const torch::Tensor& batched_logits) {
     // Apply ReLU to ensure non-negative logits
     auto relu_logits = torch::relu(batched_logits); // [batch_size, num_actions]
-    // Sum logits across actions
     auto logits_sum = relu_logits.sum(1, true); // [batch_size, 1]
-    // Identify batches where the sum is positive
     auto positive_mask = logits_sum.squeeze(1) > 0; // [batch_size]
-    // Initialize the strategy tensor
     auto strategy = torch::zeros_like(batched_logits); // [batch_size, num_actions]
 
     // Handle positive sums
     if (positive_mask.any().item<bool>()) {
-        // Indices of positive batches
         auto positive_indices = torch::nonzero(positive_mask).squeeze(1); // [num_positive]
-        // Select positive logits and sums
         auto positive_logits = relu_logits.index_select(0, positive_indices); // [num_positive, num_actions]
         auto positive_logits_sum = logits_sum.index_select(0, positive_indices); // [num_positive, 1]
-        // Compute the strategy for positive batches
         auto positive_strategy = positive_logits / positive_logits_sum; // [num_positive, num_actions]
-        // Update the strategy tensor
         strategy.index_copy_(0, positive_indices, positive_strategy);
     }
 
     // Handle non-positive sums
     auto negative_mask = ~positive_mask; // [batch_size]
     if (negative_mask.any().item<bool>()) {
-        // Indices of negative batches
         auto negative_indices = torch::nonzero(negative_mask).squeeze(1); // [num_negative]
-        // Select negative logits
         auto negative_logits = relu_logits.index_select(0, negative_indices); // [num_negative, num_actions]
-        // Find the action with the maximum logit
         auto max_indices = torch::argmax(negative_logits, 1); // [num_negative]
-        // Create one-hot vectors
         auto one_hot = torch::zeros({negative_indices.size(0), batched_logits.size(1)}, batched_logits.options());
         one_hot.scatter_(1, max_indices.unsqueeze(1), 1);
-        // Update the strategy tensor
         strategy.index_copy_(0, negative_indices, one_hot);
     }
 

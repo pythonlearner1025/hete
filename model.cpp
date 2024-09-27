@@ -1,5 +1,4 @@
 // model.cpp
-
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <vector>
@@ -34,7 +33,8 @@ struct CardEmbeddingImpl : torch::nn::Module {
         auto x = input.reshape({-1});
         
         // Create a mask for valid cards (input >= 0)
-        auto valid = (x >= 0).to(torch::kFloat); // -1 indicates 'no card'
+                                                      // set copy to true
+        auto valid = (x >= 0).to(torch::kFloat, false, true); // -1 indicates 'no card'
         
         // Clamp negative indices to 0
         x = torch::clamp(x, /*min=*/0);
@@ -180,7 +180,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         z = torch::relu(comb1->forward(z));                       // [N,MODEL_DIM]
         z = torch::relu(comb2->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
         z = torch::relu(comb3->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        z = norm->forward(z);                                      // LayerNorm
+        //z = norm->forward(z);                                      // LayerNorm
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
@@ -278,6 +278,7 @@ void* load_model(const std::string& path) {
     try {
         DeepCFRModel* loaded_model = new DeepCFRModel();
         torch::load(*loaded_model, path);
+        DEBUG_NONE("loaded model ptr" << loaded_model);
         std::cout << "Model loaded successfully from " << path << std::endl;
         return loaded_model;
     } catch (const c10::Error& e) {
@@ -285,13 +286,6 @@ void* load_model(const std::string& path) {
         throw;
     }
 }
-/*
-    BATCH IS FASTER
-
-    Total forward call time over 1326 calls: 161239 microseconds
-    Average batched forward call time over 30 calls @ BS=1326: 7790.6 microseconds
-    ~20x speedup
-*/
 
 void create_batch(const std::array<torch::Tensor, 4>& cards_template, const torch::Tensor& bet_fracs_template, const torch::Tensor& bet_status_template, int64_t batch_size, std::array<torch::Tensor, 4>& batched_cards, torch::Tensor& batched_bet_fracs, torch::Tensor& batched_bet_status) {
     // Since input values don't matter, we'll create tensors with the correct shapes
