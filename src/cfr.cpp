@@ -37,115 +37,6 @@ std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> global_index(0);
 const int MAX_SIZE = 40e6;
 
-torch::Tensor init_batched_hands(int BS) {
-    std::vector<int64_t> hand_shape = {BS, 2};
-    return torch::zeros(hand_shape, torch::kInt);
-}
-
-torch::Tensor init_batched_flops(int BS) {
-    std::vector<int64_t> flop_shape = {BS, 2};
-    return torch::zeros(flop_shape, torch::kInt);
-}
-
-torch::Tensor init_batched_turns(int BS) {
-    std::vector<int64_t> turn_shape = {BS, 2};
-    return torch::zeros(turn_shape, torch::kInt);
-}
-
-torch::Tensor init_batched_rivers(int BS) {
-    std::vector<int64_t> river_shape = {BS, 2};
-    return torch::zeros(river_shape, torch::kInt);
-}
-
-torch::Tensor init_batched_fracs(int BS) {
-    std::vector<int64_t> batched_fracs_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return torch::zeros(batched_fracs_shape, torch::kFloat);
-}
-
-torch::Tensor init_batched_status(int BS) { 
-    std::vector<int64_t> batched_status_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return torch::zeros(batched_status_shape, torch::kFloat);
-}
-
-torch::Tensor init_batched_advs(int BS) {
-    std::vector<int64_t> batched_advs_shape = {BS, NUM_ACTIONS};
-    return torch::zeros(batched_advs_shape, torch::kFloat);
-}
-
-torch::Tensor init_batched_iters(int BS) {
-    std::vector<int64_t> batched_iters_shape = {BS, 1};
-    return torch::zeros(batched_iters_shape, torch::kInt);
-}
-
-void get_state(
-    PokerEngine& game,
-    State* state,
-    int player
-) {
-    auto history = game.construct_history();
-    std::array<int, 2> hand = game.players[player].hand;
-    std::array<int, 5> board = game.get_board();
-
-    // Copy the bet_status and bet_fracs from history to state
-    for (size_t i = 0; i < NUM_PLAYERS * MAX_ROUND_BETS * 4; ++i) {
-        state->bet_status[i] = history.first[i];
-        state->bet_fracs[i] = history.second[i];
-    }
-
-    // Assign hand, flop, turn, and river
-    state->hand = hand;
-    for (int i = 0; i < 3; ++i) {
-        state->flop[i] = board[i];
-    }
-
-    state->turn[0] = board[3];
-    state->river[0] = board[4];
-}
-
-void update_tensors(
-    const State* S, 
-    torch::Tensor* hand, 
-    torch::Tensor* flop, 
-    torch::Tensor* turn, 
-    torch::Tensor* river, 
-    torch::Tensor* bet_fracs, 
-    torch::Tensor* bet_status,
-    int batch = 0
-) {
-    // Get accessors
-    auto hand_a = hand->accessor<int32_t, 2>();
-    auto flop_a = flop->accessor<int32_t, 2>();
-    auto turn_a = turn->accessor<int32_t, 2>();
-    auto river_a = river->accessor<int32_t, 2>();
-    auto bet_fracs_a = bet_fracs->accessor<float, 2>();
-    auto bet_status_a = bet_status->accessor<float, 2>();
-
-    // Update hand cards (first two cards)
-    for (int i = 0; i < 2; ++i) {
-        hand_a[batch][i] = S->hand[i];
-    }
-
-    // Update flop cards (next three cards)
-    for (int i = 0; i < 3; ++i) {
-        flop_a[batch][i] = S->flop[i];
-    }
-
-    // Update turn card
-    turn_a[batch][0] = S->turn[0];
-
-    // Update river card
-    river_a[batch][0] = S->river[0];
-
-    // Update bet fractions
-    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_a[batch][i] = S->bet_fracs[i];
-    }
-
-    // Update bet status
-    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_status_a[batch][i] = S->bet_status[i];
-    }
-}
 
 constexpr double NULL_VALUE = -42.0;
 
@@ -371,7 +262,7 @@ void iterative_traverse(
             // check if model_ptr changed
             DEBUG_NONE("batch_size = " << batch_size);
             //DEBUG_NONE("model_ptr = " << nets[player]);
-            torch::Tensor logits = nets[player]->forward(
+            auto logits = nets[player]->forward(
                 batched_hands,
                 batched_flops,
                 batched_turns,
@@ -380,7 +271,7 @@ void iterative_traverse(
                 batched_status
             );
 
-            torch::Tensor regrets = regret_match_batched(logits);
+            auto regrets = regret_match_batched(logits);
             auto regrets_a = regrets.accessor<float, 2>();
 
             // Then update the loop that uses regrets:

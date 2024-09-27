@@ -11,15 +11,6 @@
 #include "util.h"
 #include "eval.h"
 
-struct State {
-    std::array<int, 2> hand{};
-    std::array<int, 3> flop{};
-    std::array<int, 1> turn{};
-    std::array<int, 1> river{};
-    std::array<double, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_fracs{};
-    std::array<int, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_status{};
-};
-
 // Define a structure for traverse advantages
 struct TraverseAdvantage {
     std::shared_ptr<State> state;

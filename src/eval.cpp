@@ -8,7 +8,6 @@
 #include <random>
 #include <numeric>
 
-/*
 constexpr int MAX_REMAINING_CARDS = 52 - 2 - 5;
 constexpr int MAX_OPP_RANGE = 1326;
 
@@ -337,17 +336,18 @@ double get_bet_amt(PokerEngine& engine, int player, int act) {
 
 int get_lbr_act(
     PokerEngine& engine,
-    void* policy_net,
+    DeepCFRModel policy_net,
     std::array<std::array<int, 2>, NUM_PLAYERS> player_hands, 
     std::array<int, NUM_PLAYERS-1> opp_idxs,
     int player,
-    std::array<std::vector<Infoset>, NUM_PLAYERS-1> opp_histories, // list of each infoset opp saw before acting 
+    std::array<std::vector<State>, NUM_PLAYERS-1> opp_states, // list of each infoset opp saw before acting 
     std::array<int, 52> deck_cards
 ) {
     std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> opp_ranges{}; 
     std::array<int, 5> curr_board = engine.get_board();
     std::array<int, 52> curr_deck = engine.get_deck();
 
+    // filter valid opp ranges
     for (size_t i=0; i<NUM_PLAYERS-1; ++i) {
         int opp_idx = opp_idxs[i];
         for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
@@ -385,7 +385,7 @@ int get_lbr_act(
         }
     }
 
-    // normalize
+    // normalize opp ranges
     for (size_t i=0; i<NUM_PLAYERS-1; ++i) {
         double total_prob = 0.0;
         for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
@@ -401,18 +401,30 @@ int get_lbr_act(
             throw std::runtime_error("No valid hands for opponent " + std::to_string(i));
         }
     }
+    auto hands = init_batched_hands(1);
+    auto flops = init_batched_flops(1);
+    auto turns = init_batched_turns(1);
+    auto rivers = init_batched_rivers(1);
+    auto bet_fracs = init_batched_fracs(1);
+    auto bet_status = init_batched_status(1);
 
-    // init opp ranges 
+    // fill in opp ranges 
     // TODO init for those who didn't fold
     for (size_t i=0; i<NUM_PLAYERS-1; ++i) {
-        // update opp range to reflect game history
-        if (opp_histories[i].size() > 0) {
-            for (auto infoset : opp_histories[i]) {
+        // update opp range to be conditioned on game history
+        if (opp_states[i].size() > 0) {
+            for (auto state : opp_states[i]) {
                 for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
                     float curr_hand_prob = opp_ranges[i][j]; 
                     std::array<int, 2> opp_hand = card_lookup_table[j];
-                    torch::Tensor logits = deep_cfr_model_forward(policy_net, infoset.cards, infoset.bet_fracs, infoset.bet_status);
-                    std::array<double, NUM_ACTIONS> strat = regret_match(logits);    
+                    update_tensor(&state, &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
+                    torch::Tensor logits = policy_net->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
+                    auto regrets = regret_match_batched(logits); 
+                    auto regrets_a = regrets.accessor<float, 2>();
+                    std::array<double, NUM_ACTIONS> strat{};
+                    for (size_t i=0; i<NUM_ACTIONS; ++i) {
+                        strat[i] = regrets_a[0][i];
+                    }    
                     double max_prob = 0.0;
                     int max_act = 0;
                     for (size_t a=0; a<NUM_ACTIONS; ++a) {
@@ -451,14 +463,20 @@ int get_lbr_act(
     action_utils[1] = call_util;
 
     // init original game state trackers
-    Infoset infoset = prepare_infoset(engine, player);
-    std::array<torch::Tensor, 4> cards = infoset.cards;
+    State *state;
+    get_state(&engine, state, player);
 
     for (size_t a=2; a<NUM_ACTIONS; ++a) {
         DEBUG_INFO("calc act: " << a << " util");
         // init cf game states
-        torch::Tensor cf_bet_frac = infoset.bet_fracs;
-        torch::Tensor cf_bet_status = infoset.bet_status;
+        auto cf_hands = init_batched_hands(1);
+        auto cf_flops = init_batched_flops(1);
+        auto cf_turns = init_batched_turns(1);
+        auto cf_rivers = init_batched_rivers(1);
+        auto cf_bet_fracs = init_batched_fracs(1);
+        auto cf_bet_status = init_batched_status(1);
+        update_tensors(state, &cf_hands, &cf_flops, &cf_turns, &cf_rivers, &cf_bet_fracs, &cf_bet_status);
+
         std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> cf_opp_ranges;
         std::copy(opp_ranges.begin(), opp_ranges.end(), cf_opp_ranges.begin());
 
@@ -468,7 +486,7 @@ int get_lbr_act(
         // get the player - player_index
         int last_bet_idx = 0;
         for (size_t j=MAX_ROUND_BETS*NUM_PLAYERS*4-1; j>=0; --j) {
-            if (cf_bet_frac[0][j].item<double>() > 0.0) {
+            if (state.bet_fracs[j] > 0.0) {
                 last_bet_idx = j;
                 break;
             }
@@ -489,8 +507,10 @@ int get_lbr_act(
         DEBUG_INFO("max_bet_length: " << cf_bet_frac.size(1));
         if (player_bet_idx < MAX_ROUND_BETS*NUM_PLAYERS*4) {
             // must index in at 0 due to shape [1, total_bets]
-            cf_bet_frac[0][player_bet_idx] = bet_amt;
-            cf_bet_status[0][player_bet_idx] = (bet_amt > 0 ? 1 : 0);
+            auto cf_bet_fracs_a = cf_bet_fracs.accessor<float, 2>(); 
+            auto cf_bet_status_a = cf_bet_status.accessor<float, 2>(); 
+            cf_bet_fracs_a[0][player_bet_idx] = bet_amt;
+            cf_bet_status_a[0][player_bet_idx] = (bet_amt > 0 ? 1 : 0);
         } else throw std::runtime_error("shift calc is incorrect");
 
         DEBUG_INFO("calc shift");
@@ -538,14 +558,6 @@ int get_lbr_act(
         double fp = 0.0;
         int batch_idx = 0;
 
-        // batch tensors
-        std::array<int, EVAL_BS> batched_hand_indices{}; 
-        std::array<torch::Tensor, 4> batched_cards = init_batched_cards(curr_board);
-        DEBUG_INFO("check batched cards at init");
-        DEBUG_INFO(batched_cards[1][0]);
-        torch::Tensor batched_bet_fracs = init_batched_fracs(infoset.bet_fracs);
-        torch::Tensor batched_bet_status = init_batched_status(infoset.bet_status);
-
         // Initialize random engine
         std::random_device rd;
         std::mt19937 rng(rd());
@@ -557,12 +569,12 @@ int get_lbr_act(
         }
         const int max_handpick_retries = 10;
 
+        std::vector<std::tuple<int, int>> sampled_opp_hand_indices;
         for (int sample = 0; sample < ACT_MC_SAMPLES; ++sample) {
             // collect used cards for this sample
             std::bitset<52> sample_used_cards = board_cards;
 
              // Sample opponent hands without conflicts
-            std::array<int, NUM_PLAYERS-1> sampled_opp_hand_indices{-1};
             bool valid_sample = true;
 
             for (int opp_idx = 0; opp_idx < NUM_PLAYERS - 1; ++opp_idx) {
@@ -592,7 +604,7 @@ int get_lbr_act(
                         // No conflict
                         sample_used_cards.set(opp_hand[0]);
                         sample_used_cards.set(opp_hand[1]);
-                        sampled_opp_hand_indices[opp_idx] = hand_idx;
+                        sampled_opp_hand_indices.push_back(std::make_tuple(hand_idx, opp_idx));
                         hand_found = true;
                         break;
                     }
@@ -603,74 +615,72 @@ int get_lbr_act(
                     break;
                 }
             }
+        }
 
-            // Skip this sample if conflicts couldn't be resolved
-            if (!valid_sample) {
-                continue;
-            }
-            
-            // fill in batches
-            DEBUG_INFO("begin filling batches");
-            int dead = 0;
-            for (int opp_idx = 0; opp_idx < NUM_PLAYERS - 1; ++opp_idx) {
-                int opp_hand_index = sampled_opp_hand_indices[opp_idx];
-                // skip dead opponents
-                if (opp_hand_index < 0) {
-                    dead++;
-                    continue; 
-                }
-                std::array<int, 2> opp_hand = card_lookup_table[opp_hand_index]; 
-                int idx = batch_idx*live_opps+(opp_idx-dead);
-                DEBUG_INFO("batch_idx: " << idx);
-                // hand is still player hand, so update to this opp's hand
-                DEBUG_INFO(batched_cards[0][idx].sizes());
-                DEBUG_INFO("[2]");
-                batched_cards[0][idx][0] = opp_hand[0];
-                batched_cards[0][idx][1] = opp_hand[1];
-                DEBUG_INFO("fill cards");
+        size_t MC_BS = 1024;
+        auto batched_hands = init_batched_hands(MC_BS);
+        auto batched_flops = init_batched_flops(MC_BS);
+        auto batched_turns = init_batched_turns(MC_BS);
+        auto batched_rivers = init_batched_rivers(MC_BS);
+        auto batched_fracs = init_batched_fracs(MC_BS);
+        auto batched_status = init_batched_status(MC_BS);
 
-                // todo this can just be initialized in beginning without change
-                DEBUG_INFO(batched_bet_fracs[idx].sizes());
-                DEBUG_INFO(cf_bet_frac.squeeze().sizes());
-                batched_bet_fracs[idx] = cf_bet_frac.squeeze().clone();
-                DEBUG_INFO(batched_bet_status[idx].sizes());
-                DEBUG_INFO(batched_bet_status[idx].sizes());
-                batched_bet_status[idx] = cf_bet_status.squeeze().clone();
-                DEBUG_INFO("fill bets");
+        size_t num_repeats = (all_advs.size() + TRAIN_BS - 1) / TRAIN_BS;
+        size_t batch_idx = 0;
 
-                // store hand idx for convenience
-                batched_hand_indices[idx] = opp_hand_index;
-                DEBUG_INFO("fill ts");
+        for (size_t r = 0; r < num_repeats; ++r) {
+            size_t batch_size = std::min(MC_BS, sampled_opp_hand_indices.count()-batch_idx);
+            for (size_t i = 0; i < batch_size; ++i) {
+                int [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx];
+                State* opp_state;
+                get_state(&engine, opp_state, opp_idx);
+                std::array<int, 2> cf_hand = card_lookup_table[hand_idx];
+                update_tensors(
+                    opp_state,
+                    &batched_hands,
+                    &batched_flops,
+                    &batched_turns,
+                    &batched_rivers,
+                    &batched_fracs,
+                    &batched_status
+                );
+                auto hand_a = batched_hands->accessor<int32_t, 2>();
+                hand_a[i][0] = cf_hand[0];
+                hand_a[i][1] = cf_hand[1];
+                batch_idx++;
             }
 
-            batch_idx++;
+            auto logits = policy_net->forward(
+                batched_hands,
+                batched_flops,
+                batched_turns,
+                batched_rivers,
+                batched_fracs,
+                batched_status
+            );
 
-            // do batched inference and update counterfactual opponent ranges 
-            if (batch_idx * live_opps == EVAL_BS) {
-                auto batched_logits = deep_cfr_model_forward(policy_net, batched_cards, batched_bet_fracs, batched_bet_status);
-                for (size_t b = 0; b < EVAL_BS; ++b) {
-                    auto logits = batched_logits[b];
-                    std::array<double, NUM_ACTIONS> regrets = regret_match(logits);
-                    int opp_idx = b % live_opps;
-                    int opp_hand_idx = batched_hand_indices[b*live_opps+opp_idx];
-                    double opp_hand_prob = cf_opp_ranges[opp_idx][opp_hand_idx];
-                    fp += opp_hand_prob * (1-regrets[0]);
-                    cf_opp_ranges[opp_idx][opp_hand_idx] = opp_hand_prob * (1-regrets[0]);
-                }
+            auto regrets = regret_match_batched(logits);
+            auto regrets_a = regrets.accessor<float, 2>();
 
-                // normalize ranges
-                for (size_t i=0; i<NUM_PLAYERS-1; ++i) {
-                    if (engine.players[i].status == PokerEngine::PlayerStatus::Playing) {
-                        cf_opp_ranges[i] = normalize_to_prob_dist(cf_opp_ranges[i]);
-                    }
-                }
-
-                batch_idx = 0;
+            for (size_t i = 0; i < batch_size; ++i) {
+                int [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx-batch_size+i];
+                double opp_hand_prob = cf_opp_ranges[opp_idx][hand_idx];
+                fp += opp_hand_prob * (1 - regrets_a[i][0]);
+                cf_opp_ranges[opp_idx][hand_idx] = opp_hand_prob * (1 - regrets_a[i][0]);
+                cf_opp_ranges[opp_idx] = normalize_to_prob_dist(cf_opp_ranges[opp_idx]);
             }
         }
 
         // rollout with updated cf_opp_ranges
-        double wp = wp_rollout_monte_carlo(engine, player, player_hands[player], cf_opp_ranges, opp_idxs, curr_board, curr_deck);
+        double wp = wp_rollout_monte_carlo(
+            engine, 
+            player, 
+            player_hands[player], 
+            cf_opp_ranges, 
+            opp_idxs, 
+            curr_board, 
+            curr_deck
+        );
 
         // calc current action's ev
         double pot = engine.get_pot();
@@ -687,7 +697,7 @@ int get_lbr_act(
 }
 
 double evaluate(
-    void* policy_net,
+    DeepCFRModel policy_net,
     int player
 ) {
     // init game 
@@ -704,10 +714,17 @@ double evaluate(
     // avg mbb winnings
     double total_mbb = 0.0;
 
-    DEBUG_INFO("begin eval mc simulations");
+    // init hands
+    auto hands = init_batched_hands(1);
+    auto flops = init_batched_flops(1);
+    auto turns = init_batched_turns(1);
+    auto rivers = init_batched_rivers(1);
+    auto fracs = init_batched_fracs(1);
+    auto status = init_batched_status(1);
+
     for (size_t i = 0; i < EVAL_MC_SAMPLES; ++i) {
         // init history
-        std::array<std::vector<Infoset>, NUM_PLAYERS> all_histories{};
+        std::array<std::vector<State>, NUM_PLAYERS> all_histories{};
         for (auto& history : all_histories) {
             history.reserve(MAX_ROUND_BETS * 4);
         }
@@ -729,10 +746,16 @@ double evaluate(
         while (engine.get_game_status() && engine.is_playing(player)) {
             if (engine.turn() == player) {
                 DEBUG_INFO("Player's turn");
-                Infoset I = prepare_infoset(engine, player);
-                all_histories[player].push_back(I);
-                torch::Tensor logits = deep_cfr_model_forward(policy_net, I.cards, I.bet_fracs, I.bet_status);
-                std::array<double, NUM_ACTIONS> strat = regret_match(logits);
+                State* state;
+                get_state(&engine, state);
+                update_tensors(state, &hands, &flops, &turns, &rivers, &fracs, &status);
+                auto logits = policy_net->forward(hands, flops, turns, rivers, fracs, status);
+                auto regrets = regret_match_batched(logits);
+                auto regrets_a = regrets.accessor<float, 2>();
+                std::array<NUM_ACTIONS, float> strats{};
+                for (size_t s=0;s<NUM_ACTIONS;++s) {
+                    strats[s] = regrets[0][s];
+                }
                 int act = 0;
                 double max_prob = 0.0;
                 for (size_t a=0; a<NUM_ACTIONS; ++a) {
@@ -752,8 +775,9 @@ double evaluate(
             } else {
                 int opp = engine.turn();
                 DEBUG_INFO("Opp " << opp << " turn");
-                Infoset I = prepare_infoset(engine, player);
-                all_histories[opp].push_back(I);
+                State* state;
+                get_state(&engine, state); 
+                all_histories[opp].push_back(state);
 
                 std::array<std::vector<Infoset>, NUM_PLAYERS-1> opp_histories{};
                 std::array<int, NUM_PLAYERS-1> opp_idxs{};
@@ -804,4 +828,3 @@ double evaluate(
     DEBUG_NONE("Policy net is evaluated at: " << avg_mbb << "mbb");
     return avg_mbb;
 }
-*/
