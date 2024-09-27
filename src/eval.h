@@ -6,6 +6,6 @@
 #include "util.h"
 
 double evaluate(
-    void* policy_net,
+    DeepCFRModel policy_net,
     int player
 );

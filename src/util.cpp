@@ -1,5 +1,50 @@
 #include "util.h"
 
+void update_tensors(
+    const State* S, 
+    torch::Tensor* hand, 
+    torch::Tensor* flop, 
+    torch::Tensor* turn, 
+    torch::Tensor* river, 
+    torch::Tensor* bet_fracs, 
+    torch::Tensor* bet_status,
+    int batch = 0
+) {
+    // Get accessors
+    auto hand_a = hand->accessor<int32_t, 2>();
+    auto flop_a = flop->accessor<int32_t, 2>();
+    auto turn_a = turn->accessor<int32_t, 2>();
+    auto river_a = river->accessor<int32_t, 2>();
+    auto bet_fracs_a = bet_fracs->accessor<float, 2>();
+    auto bet_status_a = bet_status->accessor<float, 2>();
+
+    // Update hand cards (first two cards)
+    for (int i = 0; i < 2; ++i) {
+        hand_a[batch][i] = S->hand[i];
+    }
+
+    // Update flop cards (next three cards)
+    for (int i = 0; i < 3; ++i) {
+        flop_a[batch][i] = S->flop[i];
+    }
+
+    // Update turn card
+    turn_a[batch][0] = S->turn[0];
+
+    // Update river card
+    river_a[batch][0] = S->river[0];
+
+    // Update bet fractions
+    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
+        bet_fracs_a[batch][i] = S->bet_fracs[i];
+    }
+
+    // Update bet status
+    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
+        bet_status_a[batch][i] = S->bet_status[i];
+    }
+}
+
 // Sample an action according to the strategy probabilities
 int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
     double r = static_cast<double>(rand()) / RAND_MAX;
@@ -54,107 +99,6 @@ bool verify_action(PokerEngine* engine, int player, int act) {
         bet_amt += inc;
     }
     return false;
-}
-
-void get_cards(PokerEngine& game, int player, Infoset& I) {
-    std::array<int, 5> board = game.get_board();
-    int board_size = 0;
-    for (size_t i = 0; i < 5; ++i) {
-        if (board[i] != -1) board_size++;
-    }
-    
-    DEBUG_NONE("Player hand: " << game.players[player].hand[0] << ", " << game.players[player].hand[1]);
-    
-    // Hand cards
-    DEBUG_NONE(I.cards[0].sizes());
-    DEBUG_NONE(I.cards[1].sizes());
-    DEBUG_NONE(I.cards[2].sizes());
-    DEBUG_NONE(I.cards[3].sizes());
-    auto hand_accessor = I.cards[0].accessor<int, 1>();
-    DEBUG_NONE("worked");
-    hand_accessor[0] = game.players[player].hand[0];
-    hand_accessor[1] = game.players[player].hand[1];
-    
-    
-    // Flop cards
-    auto flop_accessor = I.cards[1].accessor<int, 2>();
-    if (board_size >= 3) {
-        DEBUG_INFO("Flop: " << board[0] << ", " << board[1] << ", " << board[2]);
-        flop_accessor[0][0] = board[0];
-        flop_accessor[0][1] = board[1];
-        flop_accessor[0][2] = board[2];
-    } else {
-        flop_accessor[0][0] = -1;
-        flop_accessor[0][1] = -1;
-        flop_accessor[0][2] = -1;
-    }
-    
-    // Turn card
-    auto turn_accessor = I.cards[2].accessor<int, 2>();
-    if (board_size >= 4) {
-        DEBUG_INFO("Turn: " << board[3]);
-        turn_accessor[0][0] = board[3];
-    } else {
-        turn_accessor[0][0] = -1;
-    }
-    
-    // River card
-    auto river_accessor = I.cards[3].accessor<int, 2>();
-    if (board_size >= 5) {
-        DEBUG_INFO("River: " << board[4]);
-        river_accessor[0][0] = board[4];
-    } else {
-        river_accessor[0][0] = -1;
-    }
-}
-
-Infoset prepare_infoset(
-    PokerEngine& game,
-    int player
-) {
-    Infoset I;
-    auto history = game.construct_history();
-    get_cards(game, player, I);
-
-    torch::Tensor bet_status = torch::empty({1, history.first.size()}, torch::kInt);
-    auto status_accessor = bet_status.accessor<int,2>();
-
-    torch::Tensor bet_fracs = torch::empty({1, history.second.size()}, torch::kFloat);
-    auto frac_accessor = bet_fracs.accessor<float,2>();
-    for (size_t i = 0; i < NUM_PLAYERS * 4 * MAX_ROUND_BETS; ++i) {
-        status_accessor[0][i] = history.first[i]; 
-        frac_accessor[0][i] = history.second[i];
-    }
-
-    I.bet_fracs = bet_fracs;
-    I.bet_status = bet_status;
-
-    return I;
-}
-
-// Must return a probability distribution
-std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
-    auto relu_logits = torch::relu(logits);
-    
-    double logits_sum = relu_logits.sum().item<double>();
-    
-    std::array<double, NUM_ACTIONS> strat{};
-    
-    // If the sum is positive, calculate the strategy
-    if (logits_sum > 0) {
-        auto strategy_tensor = relu_logits / logits_sum;
-        auto strat_data = strategy_tensor.data_ptr<float>();
-        for (int i = 0; i < NUM_ACTIONS; ++i) {
-            strat[i] = strat_data[i];
-        }
-    } 
-    // If the sum is zero or negative, return a one-hot vector for the max logit
-    else {
-        auto max_index = torch::argmax(relu_logits).item<int>();
-        std::fill(strat.begin(), strat.end(), 0.0);
-        strat[max_index] = 1.0;
-    }
-    return strat;
 }
 
 torch::Tensor regret_match_batched(const torch::Tensor& batched_logits) {

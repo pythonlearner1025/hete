@@ -8,15 +8,29 @@
 #include <algorithm>
 #include <cmath>
 
-// Define a structure for Infoset
-struct Infoset {
-    std::array<torch::Tensor, 4> cards;
-    torch::Tensor bet_fracs;
-    torch::Tensor bet_status;
+struct State {
+    std::array<int, 2> hand{};
+    std::array<int, 3> flop{};
+    std::array<int, 1> turn{};
+    std::array<int, 1> river{};
+    std::array<double, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_fracs{};
+    std::array<int, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_status{};
 };
 
-Infoset prepare_infoset(
+void update_tensors(
+    const State* S, 
+    torch::Tensor* hand, 
+    torch::Tensor* flop, 
+    torch::Tensor* turn, 
+    torch::Tensor* river, 
+    torch::Tensor* bet_fracs, 
+    torch::Tensor* bet_status,
+    int batch = 0
+);
+
+void get_state(
     PokerEngine& game,
+    State* state,
     int player
 );
 
@@ -46,6 +60,47 @@ std::size_t argmax(const std::array<T, N>& arr) {
 int sample_action(const std::array<double, NUM_ACTIONS>& strat);
 void take_action(PokerEngine* engine, int player, int act);
 bool verify_action(PokerEngine* engine, int player, int act);
-void get_cards(PokerEngine& game, int player, Infoset& I);
+
 torch::Tensor regret_match_batched(const torch::Tensor& batched_logits);
+
+torch::Tensor init_batched_hands(int BS) {
+    std::vector<int64_t> hand_shape = {BS, 2};
+    return torch::zeros(hand_shape, torch::kInt);
+}
+
+torch::Tensor init_batched_flops(int BS) {
+    std::vector<int64_t> flop_shape = {BS, 2};
+    return torch::zeros(flop_shape, torch::kInt);
+}
+
+torch::Tensor init_batched_turns(int BS) {
+    std::vector<int64_t> turn_shape = {BS, 2};
+    return torch::zeros(turn_shape, torch::kInt);
+}
+
+torch::Tensor init_batched_rivers(int BS) {
+    std::vector<int64_t> river_shape = {BS, 2};
+    return torch::zeros(river_shape, torch::kInt);
+}
+
+torch::Tensor init_batched_fracs(int BS) {
+    std::vector<int64_t> batched_fracs_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
+    return torch::zeros(batched_fracs_shape, torch::kFloat);
+}
+
+torch::Tensor init_batched_status(int BS) { 
+    std::vector<int64_t> batched_status_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
+    return torch::zeros(batched_status_shape, torch::kFloat);
+}
+
+torch::Tensor init_batched_advs(int BS) {
+    std::vector<int64_t> batched_advs_shape = {BS, NUM_ACTIONS};
+    return torch::zeros(batched_advs_shape, torch::kFloat);
+}
+
+torch::Tensor init_batched_iters(int BS) {
+    std::vector<int64_t> batched_iters_shape = {BS, 1};
+    return torch::zeros(batched_iters_shape, torch::kInt);
+}
+
 #endif
