@@ -462,8 +462,8 @@ int get_lbr_act(
     action_utils[1] = call_util;
 
     // init original game state trackers
-    State *state;
-    get_state(engine, state, player);
+    auto state = std::make_shared<State>();
+    get_state(engine, state.get(), player);
 
     for (size_t a=2; a<NUM_ACTIONS; ++a) {
         DEBUG_INFO("calc act: " << a << " util");
@@ -474,7 +474,7 @@ int get_lbr_act(
         auto cf_rivers = init_batched_rivers(1);
         auto cf_bet_fracs = init_batched_fracs(1);
         auto cf_bet_status = init_batched_status(1);
-        update_tensors(state, &cf_hands, &cf_flops, &cf_turns, &cf_rivers, &cf_bet_fracs, &cf_bet_status);
+        update_tensors(state.get(), &cf_hands, &cf_flops, &cf_turns, &cf_rivers, &cf_bet_fracs, &cf_bet_status);
 
         std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> cf_opp_ranges;
         std::copy(opp_ranges.begin(), opp_ranges.end(), cf_opp_ranges.begin());
@@ -630,11 +630,11 @@ int get_lbr_act(
             size_t batch_size = std::min(MC_BS, sampled_opp_hand_indices.size()-batch_idx);
             for (size_t i = 0; i < batch_size; ++i) {
                 auto [hand_idx, opp_idx] = sampled_opp_hand_indices[batch_idx];
-                State* opp_state;
-                get_state(engine, opp_state, opp_idx);
+                auto opp_state = std::make_shared<State>();
+                get_state(engine, opp_state.get(), opp_idx);
                 std::array<int, 2> cf_hand = card_lookup_table[hand_idx];
                 update_tensors(
-                    opp_state,
+                    opp_state.get(),
                     &batched_hands,
                     &batched_flops,
                     &batched_turns,
@@ -744,9 +744,9 @@ double evaluate(
         while (engine.get_game_status() && engine.is_playing(player)) {
             if (engine.turn() == player) {
                 DEBUG_INFO("Player's turn");
-                State* state;
-                get_state(engine, state, player);
-                update_tensors(state, &hands, &flops, &turns, &rivers, &fracs, &status);
+                auto state = std::make_shared<State>();
+                get_state(engine, state.get(), player);
+                update_tensors(state.get(), &hands, &flops, &turns, &rivers, &fracs, &status);
                 auto logits = policy_net->forward(hands, flops, turns, rivers, fracs, status);
                 auto regrets = regret_match_batched(logits);
                 auto regrets_a = regrets.accessor<float, 2>();
