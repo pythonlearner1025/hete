@@ -34,7 +34,6 @@ torch::Tensor random_forward() {
 
 std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> global_index(0);
-const int MAX_SIZE = 40e6;
 constexpr double NULL_VALUE = -42.0;
 
 // Adjusted Advantage struct with smart pointers
@@ -143,7 +142,7 @@ void iterative_traverse(
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
         int num_advs = global_index.load();
-        if (num_advs >= MAX_ADVS) break;
+        if (num_advs >= MAX_SIZE) break;
 
         DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal << " advs=" << num_advs);
 
@@ -171,7 +170,7 @@ void iterative_traverse(
                 }
             }
             else if (engine.turn() == player) {
-                
+
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
 
@@ -265,7 +264,7 @@ void iterative_traverse(
             // occurs in both single and multi thread
             // checking if this is libtorch problem or my code problem
             // check if model_ptr changed
-            DEBUG_NONE("batch_size = " << batch_size);
+            //DEBUG_NONE("batch_size = " << batch_size);
             //DEBUG_NONE("model_ptr = " << nets[player]);
             auto logits = nets[player]->forward(
                 batched_hands.slice(0,0,batch_size),
@@ -513,7 +512,7 @@ int main() {
                 }
             }
 
-            //double eval_mbb = evaluate(train_net, player);
+            double eval_mbb = evaluate(train_net, player);
 
             // todo save nets
             DEBUG_NONE("saving nets..");
