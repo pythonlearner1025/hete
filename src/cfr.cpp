@@ -14,23 +14,10 @@
 #include <sstream> // For std::stringstream
 #include <memory>
 
-// Helper function for getting current timestamp
-std::string get_timestamp() {
-    auto now = std::chrono::system_clock::now();
-    auto now_c = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::localtime(&now_c), "%Y-%m-%d %X");
-    return ss.str();
-}
-
 // Initialize random seed
 struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
-
-torch::Tensor random_forward() {
-    return torch::rand({NUM_ACTIONS}) * 2 - 1;  // Random values between -1 and 1
-}
 
 std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> global_index(0);
@@ -340,13 +327,35 @@ void iterative_traverse(
     }
 }
 
+void init_constants_log(std::string constant_log_file) {
+    std::ifstream constants_file("../src/constants.h");
+    std::ofstream const_log_file(constant_log_file);
+    if (constants_file.is_open() && const_log_file.is_open()) {
+        const_log_file << constants_file.rdbuf();
+    } else {
+        std::cerr << "Failed to open constants.h or constants log file." << std::endl;
+    }
+}
+
 int main() {
-    //DeepCFRModel model;
-    //profile_model(model, 1000, 100);
-    //exit(-1);
-    //DeepCFRModel* model = new DeepCFRModel();
-    // each thread gets a copy of latest model
-    // we just need an array
+    // Step 1: Get the current date and time at the start of training
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm *ltm = std::localtime(&now_time);
+
+    // Step 2: Create the log file paths using the current date and time
+    std::stringstream ss;
+    ss << std::put_time(ltm, "%Y%m%d%H%M%S");
+    std::string train_start_datetime = ss.str();
+
+    // Create logs directory if it doesn't exist
+    std::filesystem::create_directories("logs");
+
+    std::string logfile = "logs/" + train_start_datetime + "-train.log";
+    std::string const_log_filename = "logs/" + train_start_datetime + "-const.log";
+
+    init_constants_log(const_log_filename);
+
     std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
     DEBUG_NONE("NUM_PLAYERS = " << NUM_PLAYERS);
     for (size_t i=0; i<NUM_THREADS; ++i) {
@@ -362,7 +371,7 @@ int main() {
 
     int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;
     int remaining_traversals = NUM_TRAVERSALS % NUM_THREADS;
-    DEBUG_NONE("Traversals per thread: " << traversals_per_thread);
+    DEBUG_WRITE(logfile, "Traversals per thread: " << traversals_per_thread);
     DEBUG_NONE("Remaining traversals: " << remaining_traversals);
     std::array<double, NUM_PLAYERS> starting_stacks{};
     std::array<double, NUM_PLAYERS> antes{};
@@ -409,7 +418,7 @@ int main() {
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         for (int player=0; player<NUM_PLAYERS; ++player) {
-            DEBUG_NONE("collecting samples for player = " << player);
+            //DEBUG_NONE("collecting samples for player = " << player);
             // spawn threads
             std::vector<std::thread> threads;
             // In the main function, modify the thread creation part:
@@ -437,7 +446,9 @@ int main() {
             // define fresh net to train
             DeepCFRModel train_net;
             DEBUG_NONE("CFR ITER = " << cfr_iter);
+            DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << global_index.load());
+            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << global_index.load());
             // todo train
             // draw training samples
             std::random_device rd;
@@ -451,6 +462,7 @@ int main() {
             }
 
             DEBUG_NONE("TOTAL TRAINING SAMPLES = " << training_advs.size());
+            DEBUG_WRITE(logfile, "TOTAL TRAINING SAMPLES = " << training_advs.size());
             int batch_repeat = train_iters / TRAIN_BS;
             int advs_idx = 0;
 
@@ -509,10 +521,13 @@ int main() {
 
                     // Log the mean loss every epoch
                     DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << batch_mean_loss.item<float>());
+                    DEBUG_WRITE(logfile, "Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << batch_mean_loss.item<float>());
                 }
             }
 
             double eval_mbb = evaluate(train_net, player);
+            DEBUG_NONE("eval mbb = " << eval_mbb);
+            DEBUG_WRITE(logfile, "eval mbb = " << eval_mbb);
 
             // todo save nets
             DEBUG_NONE("saving nets..");
@@ -522,6 +537,7 @@ int main() {
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
+            DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
 
             if (std::filesystem::exists(save_path)) {
                 DEBUG_NONE("File successfully created at " << save_path);
