@@ -52,13 +52,13 @@ struct CardEmbeddingImpl : torch::nn::Module {
         x = torch::clamp(x, /*min=*/0);
         
         // Ensure x is of integer type
-        if (x.dtype() != torch::kInt64 && x.dtype() != torch::kInt32) {
-            x = x.to(torch::kInt64);
+        if (x.dtype() != torch::kInt) {
+            x = x.to(torch::kInt);
         }
         
         // Compute rank and suit indices using integer division and modulo
-        auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt64);      // [B*num_cards]
-        auto suit_indices = torch::remainder(x, 4).to(torch::kInt64);        // [B*num_cards]
+        auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt);      // [B*num_cards]
+        auto suit_indices = torch::remainder(x, 4).to(torch::kInt);        // [B*num_cards]
         
         // Ensure that rank_indices and suit_indices are within valid ranges
         rank_indices = torch::clamp(rank_indices, 0, 12); // Ranks: 0-12
