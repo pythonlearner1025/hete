@@ -19,12 +19,12 @@ struct State {
 
 void update_tensors(
     const State* S, 
-    torch::Tensor* hand, 
-    torch::Tensor* flop, 
-    torch::Tensor* turn, 
-    torch::Tensor* river, 
-    torch::Tensor* bet_fracs, 
-    torch::Tensor* bet_status,
+    torch::Tensor hand, 
+    torch::Tensor flop, 
+    torch::Tensor turn, 
+    torch::Tensor river, 
+    torch::Tensor bet_fracs, 
+    torch::Tensor bet_status,
     int batch = 0 
 );
 

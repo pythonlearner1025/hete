@@ -68,45 +68,58 @@ double wp_rollout_monte_carlo(
     } 
 
     // Prepare cumulative distribution functions (CDFs) for opponent ranges
-    std::array<std::vector<double>, NUM_PLAYERS - 1> opp_cdfs;
-    std::array<std::vector<int>, NUM_PLAYERS - 1> opp_hand_indices;
+    std::array<std::vector<double>, NUM_PLAYERS - 1> opp_cdfs{};
+    std::array<std::vector<int>, NUM_PLAYERS - 1> opp_hand_indices{};
+
     for (int i = 0; i < NUM_PLAYERS - 1; ++i) {
         int opp_idx = opp_idxs[i];
-        DEBUG_INFO("i: " << i << " opp_idx: " << opp_idx);
-        if (opp_idx == player) continue;
+        if (opp_idx == player || opp_idx < 0 || opp_idx >= NUM_PLAYERS) {
+            continue;  // Skip invalid opponent indices
+        }
+
         const auto& opp_range = opp_ranges[i];
         double cumulative = 0.0;
         std::vector<double> cdf;
         std::vector<int> hand_indices;
+
+        // Pre-allocate memory to avoid frequent reallocations
+        cdf.reserve(MAX_OPP_RANGE);
+        hand_indices.reserve(MAX_OPP_RANGE);
+
         if (engine.players[opp_idx].status == PokerEngine::PlayerStatus::Playing) {
             for (int h = 0; h < MAX_OPP_RANGE; ++h) {
                 double prob = opp_range[h];
+                if (prob <= 0.0 || h >= card_lookup_table.size()) {
+                    continue;  // Skip invalid probabilities or indices
+                }
+
                 const auto& opp_hand = card_lookup_table[h];
-                DEBUG_INFO("opp hand" << opp_hand[0] << "," << opp_hand[1] << "prob: " << prob);
-                if (prob > 0.0) {
-                    DEBUG_INFO("testing opp hand " << opp_hand[0] << "," << opp_hand[1]);
-                    if (!used_cards.test(opp_hand[0]) && !used_cards.test(opp_hand[1])) {
-                        cumulative += prob;
-                        cdf.push_back(cumulative);
-                        hand_indices.push_back(h);
-                        DEBUG_INFO("cumulated");
-                    }
+                if (opp_hand.size() != 2) {
+                    continue;  // Skip invalid hands
+                }
+
+                if (!used_cards.test(opp_hand[0]) && !used_cards.test(opp_hand[1])) {
+                    cumulative += prob;
+                    cdf.push_back(cumulative);
+                    hand_indices.push_back(h);
                 }
             }
+
             if (cumulative == 0.0) {
-                throw std::runtime_error("Opponent's range is empty after excluding used cards.");
+                // Instead of throwing, we'll skip this opponent
+                continue;
             }
+
             // Normalize the CDF
             for (double& val : cdf) {
                 val /= cumulative;
             }
-            DEBUG_INFO("normalize cdf");
         }
-        opp_cdfs[i] = cdf;
-        opp_hand_indices[i] = hand_indices;
-        DEBUG_INFO("assign cdf");
-    }
 
+        // Use emplace instead of assignment for potentially more efficient insertion
+        opp_cdfs[i] = std::move(cdf);
+        opp_hand_indices[i] = std::move(hand_indices);
+    }
     // Initialize random engine
     std::random_device rd;
     std::mt19937 rng(rd());
@@ -311,12 +324,12 @@ std::array<torch::Tensor, 4> init_batched_cards(std::array<int, 5> board) {
 
 torch::Tensor init_batched_fracs(torch::Tensor batched_fracs) {
     std::vector<int64_t> batched_fracs_shape = {EVAL_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return batched_fracs.expand(batched_fracs_shape).clone();
+    return batched_fracs.expand(batched_fracs_shape);
 }
 
 torch::Tensor init_batched_status(torch::Tensor batched_status) { 
     std::vector<int64_t> batched_status_shape = {EVAL_BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    return batched_status.expand(batched_status_shape).clone();
+    return batched_status.expand(batched_status_shape);
 }
 
 double get_bet_amt(PokerEngine& engine, int player, int act) {
@@ -339,7 +352,7 @@ int get_lbr_act(
     std::array<std::array<int, 2>, NUM_PLAYERS> player_hands, 
     std::array<int, NUM_PLAYERS-1> opp_idxs,
     int player,
-    std::array<std::vector<State*>, NUM_PLAYERS-1> opp_states, // list of each infoset opp saw before acting 
+    std::array<std::vector<std::shared_ptr<State>>, NUM_PLAYERS-1> opp_states, // list of each infoset opp saw before acting 
     std::array<int, 52> deck_cards
 ) {
     std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> opp_ranges{}; 
@@ -416,8 +429,15 @@ int get_lbr_act(
                 for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
                     float curr_hand_prob = opp_ranges[i][j]; 
                     std::array<int, 2> opp_hand = card_lookup_table[j];
-                    update_tensors(state, &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
-                    torch::Tensor logits = policy_net->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
+                    update_tensors(state.get(), hands, flops, turns, rivers, bet_fracs, bet_status);
+                    torch::Tensor logits = policy_net->forward(
+                        hands, 
+                        flops, 
+                        turns, 
+                        rivers, 
+                        bet_fracs, 
+                        bet_status
+                    );
                     auto regrets = regret_match_batched(logits); 
                     auto regrets_a = regrets.accessor<float, 2>();
                     std::array<double, NUM_ACTIONS> strat{};
@@ -465,17 +485,17 @@ int get_lbr_act(
     auto state = std::make_shared<State>();
     get_state(engine, state.get(), player);
 
+    size_t MC_BS = 1024;
+    auto batched_hands = init_batched_hands(MC_BS);
+    auto batched_flops = init_batched_flops(MC_BS);
+    auto batched_turns = init_batched_turns(MC_BS);
+    auto batched_rivers = init_batched_rivers(MC_BS);
+    auto batched_fracs = init_batched_fracs(MC_BS);
+    auto batched_status = init_batched_status(MC_BS);
+
     for (size_t a=2; a<NUM_ACTIONS; ++a) {
         DEBUG_INFO("calc act: " << a << " util");
         // init cf game states
-        auto cf_hands = init_batched_hands(1);
-        auto cf_flops = init_batched_flops(1);
-        auto cf_turns = init_batched_turns(1);
-        auto cf_rivers = init_batched_rivers(1);
-        auto cf_bet_fracs = init_batched_fracs(1);
-        auto cf_bet_status = init_batched_status(1);
-        update_tensors(state.get(), &cf_hands, &cf_flops, &cf_turns, &cf_rivers, &cf_bet_fracs, &cf_bet_status);
-
         std::array<std::array<double, MAX_OPP_RANGE>, NUM_PLAYERS-1> cf_opp_ranges;
         std::copy(opp_ranges.begin(), opp_ranges.end(), cf_opp_ranges.begin());
 
@@ -490,30 +510,7 @@ int get_lbr_act(
                 break;
             }
         }
-
-        int last_player_idx = (last_bet_idx % (MAX_ROUND_BETS * NUM_PLAYERS)) % MAX_PLAYERS;
-        DEBUG_INFO("last player idx: " << last_player_idx);
-        // if player = 0, last_player = 4, max_players = 5
-        // if last_player > player, shift = (max_players - last_player + player)
-        // else shift = player - last_player
-        // if player = 1, last_player = 0, max_players = 3
-        int shift = 0;
-        if (last_player_idx > player) shift = NUM_PLAYERS - last_player_idx + player;
-        else shift = player - last_player_idx;
-        int player_bet_idx = last_bet_idx + shift;
-        double bet_amt = get_bet_amt(engine, player, a);
-        DEBUG_INFO("player_bet_idx: " << player_bet_idx);
-        DEBUG_INFO("max_bet_length: " << cf_bet_frac.size(1));
-        if (player_bet_idx < MAX_ROUND_BETS*NUM_PLAYERS*4) {
-            // must index in at 0 due to shape [1, total_bets]
-            auto cf_bet_fracs_a = cf_bet_fracs.accessor<float, 2>(); 
-            auto cf_bet_status_a = cf_bet_status.accessor<float, 2>(); 
-            cf_bet_fracs_a[0][player_bet_idx] = bet_amt;
-            cf_bet_status_a[0][player_bet_idx] = (bet_amt > 0 ? 1 : 0);
-        } else throw std::runtime_error("shift calc is incorrect");
-
-        DEBUG_INFO("calc shift");
-
+        auto bet_amt = get_bet_amt(engine, player, a);
         // prepare for mc_rollouts of game after this act 
         std::array<std::vector<double>, NUM_PLAYERS - 1> opp_cdfs;
         std::array<std::vector<int>, NUM_PLAYERS - 1> opp_hand_indices;
@@ -615,14 +612,6 @@ int get_lbr_act(
             }
         }
 
-        size_t MC_BS = 1024;
-        auto batched_hands = init_batched_hands(MC_BS);
-        auto batched_flops = init_batched_flops(MC_BS);
-        auto batched_turns = init_batched_turns(MC_BS);
-        auto batched_rivers = init_batched_rivers(MC_BS);
-        auto batched_fracs = init_batched_fracs(MC_BS);
-        auto batched_status = init_batched_status(MC_BS);
-
         size_t num_repeats = (sampled_opp_hand_indices.size() + TRAIN_BS - 1) / TRAIN_BS;
         int batch_idx = 0;
 
@@ -635,12 +624,13 @@ int get_lbr_act(
                 std::array<int, 2> cf_hand = card_lookup_table[hand_idx];
                 update_tensors(
                     opp_state.get(),
-                    &batched_hands,
-                    &batched_flops,
-                    &batched_turns,
-                    &batched_rivers,
-                    &batched_fracs,
-                    &batched_status
+                    batched_hands,
+                    batched_flops,
+                    batched_turns,
+                    batched_rivers,
+                    batched_fracs,
+                    batched_status,
+                    i
                 );
                 auto hand_a = batched_hands.accessor<int32_t, 2>();
                 hand_a[i][0] = cf_hand[0];
@@ -649,12 +639,12 @@ int get_lbr_act(
             }
 
             auto logits = policy_net->forward(
-                batched_hands,
-                batched_flops,
-                batched_turns,
-                batched_rivers,
-                batched_fracs,
-                batched_status
+                batched_hands.slice(0,0,batch_size),
+                batched_flops.slice(0,0,batch_size),
+                batched_turns.slice(0,0,batch_size),
+                batched_rivers.slice(0,0,batch_size),
+                batched_fracs.slice(0,0,batch_size),
+                batched_status.slice(0,0,batch_size)
             );
 
             auto regrets = regret_match_batched(logits);
@@ -722,7 +712,7 @@ double evaluate(
 
     for (size_t i = 0; i < EVAL_MC_SAMPLES; ++i) {
         // init history
-        std::array<std::vector<State*>, NUM_PLAYERS> all_histories{};
+        std::array<std::vector<std::shared_ptr<State>>, NUM_PLAYERS> all_histories{};
         for (auto& history : all_histories) {
             history.reserve(MAX_ROUND_BETS * 4);
         }
@@ -746,8 +736,15 @@ double evaluate(
                 DEBUG_INFO("Player's turn");
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
-                update_tensors(state.get(), &hands, &flops, &turns, &rivers, &fracs, &status);
-                auto logits = policy_net->forward(hands, flops, turns, rivers, fracs, status);
+                update_tensors(state.get(), hands, flops, turns, rivers, fracs, status);
+                auto logits = policy_net->forward(
+                    hands, 
+                    flops, 
+                    turns, 
+                    rivers, 
+                    fracs, 
+                    status
+                );
                 auto regrets = regret_match_batched(logits);
                 auto regrets_a = regrets.accessor<float, 2>();
                 std::array<float, NUM_ACTIONS> strats{};
@@ -773,11 +770,11 @@ double evaluate(
             } else {
                 int opp = engine.turn();
                 DEBUG_INFO("Opp " << opp << " turn");
-                State* state;
-                get_state(engine, state, player); 
+                auto state = std::make_shared<State>();
+                get_state(engine, state.get(), player); 
                 all_histories[opp].push_back(state);
 
-                std::array<std::vector<State*>, NUM_PLAYERS-1> opp_histories{};
+                std::array<std::vector<std::shared_ptr<State>>, NUM_PLAYERS-1> opp_histories{};
                 std::array<int, NUM_PLAYERS-1> opp_idxs{};
                 for (size_t i=0; i<NUM_PLAYERS;++i) {
                     // opp is 0

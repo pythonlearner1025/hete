@@ -14,7 +14,6 @@
 #include <sstream> // For std::stringstream
 #include <memory>
 
-//std::atomic<int> total_advantages(0);
 // Helper function for getting current timestamp
 std::string get_timestamp() {
     auto now = std::chrono::system_clock::now();
@@ -172,6 +171,7 @@ void iterative_traverse(
                 }
             }
             else if (engine.turn() == player) {
+                
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
 
@@ -204,16 +204,24 @@ void iterative_traverse(
                 }
             }
             else {
+                // opponent case
                 int actor = engine.turn();
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
-                update_tensors(state.get(), &hands, &flops, &turns, &rivers, &bet_fracs, &bet_status);
+                update_tensors(state.get(), hands, flops, turns, rivers, bet_fracs, bet_status);
 
                 DeepCFRModel net_ptr = nets[actor];
                 if (net_ptr.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = net_ptr->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
+                torch::Tensor logits = net_ptr->forward(
+                    hands, 
+                    flops, 
+                    turns, 
+                    rivers, 
+                    bet_fracs, 
+                    bet_status
+                );
                 std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
                 int action_index = sample_action(strat);
@@ -242,13 +250,13 @@ void iterative_traverse(
                 auto& adv = all_advs[advs_idx];
                 update_tensors(
                     adv->state.get(),
-                    &batched_hands,
-                    &batched_flops,
-                    &batched_turns,
-                    &batched_rivers,
-                    &batched_fracs,
-                    &batched_status,
-                    i
+                    batched_hands,
+                    batched_flops,
+                    batched_turns,
+                    batched_rivers,
+                    batched_fracs,
+                    batched_status,
+                    i 
                 );
                 advs_idx++;
             }
@@ -260,12 +268,12 @@ void iterative_traverse(
             DEBUG_NONE("batch_size = " << batch_size);
             //DEBUG_NONE("model_ptr = " << nets[player]);
             auto logits = nets[player]->forward(
-                batched_hands,
-                batched_flops,
-                batched_turns,
-                batched_rivers,
-                batched_fracs,
-                batched_status
+                batched_hands.slice(0,0,batch_size),
+                batched_flops.slice(0,0,batch_size),
+                batched_turns.slice(0,0,batch_size),
+                batched_rivers.slice(0,0,batch_size),
+                batched_fracs.slice(0,0,batch_size),
+                batched_status.slice(0,0,batch_size)
             );
 
             auto regrets = regret_match_batched(logits);
@@ -314,6 +322,11 @@ void iterative_traverse(
                 global_advs[add_idx] = TraverseAdvantage{terminal_adv->state, t, adv_values};
             }
 
+            if (terminal_adv->parent.expired()) {
+                // Handle case where parent no longer exists
+                continue;
+            }
+
             // Backpropagate to parent
             if (auto parent_adv_ptr = terminal_adv->parent.lock()) {
                 if (parent_adv_ptr == nullptr || parent_adv_ptr == terminal_adv) continue;
@@ -325,54 +338,6 @@ void iterative_traverse(
                 }
             }
         }
-    }
-}
-
-void profile_model(DeepCFRModel& model, int batch_size = 1000, int num_iterations = 100) {
-    // Prepare input tensors
-    auto hands = init_batched_hands(batch_size);
-    auto flops = init_batched_flops(batch_size);
-    auto turns = init_batched_turns(batch_size);
-    auto rivers = init_batched_rivers(batch_size);
-    auto bet_fracs = init_batched_fracs(batch_size);
-    auto bet_status = init_batched_status(batch_size);
-
-    // Function to run inference and measure time
-    auto run_inference = [&](torch::Device device) {
-        model->to(device);
-        hands = hands.to(device);
-        flops = flops.to(device);
-        turns = turns.to(device);
-        rivers = rivers.to(device);
-        bet_fracs = bet_fracs.to(device);
-        bet_status = bet_status.to(device);
-
-        torch::NoGradGuard no_grad;
-        
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < num_iterations; ++i) {
-            auto output = model->forward(hands, flops, turns, rivers, bet_fracs, bet_status);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        std::chrono::duration<double, std::milli> elapsed = end - start;
-        return elapsed.count() / num_iterations;
-    };
-
-    // Profile CPU
-    double cpu_time = run_inference(torch::kCPU);
-    std::cout << "CPU average inference time: " << cpu_time << " ms" << std::endl;
-
-    // Profile CUDA if available
-    if (torch::cuda::is_available()) {
-        double cuda_time = run_inference(torch::kCUDA);
-        std::cout << "CUDA average inference time: " << cuda_time << " ms" << std::endl;
-        
-        // Calculate speedup
-        double speedup = cpu_time / cuda_time;
-        std::cout << "CUDA speedup: " << speedup << "x" << std::endl;
-    } else {
-        std::cout << "CUDA is not available on this system." << std::endl;
     }
 }
 
@@ -431,6 +396,18 @@ int main() {
         }
     };
 
+    auto batched_hands = init_batched_hands(TRAIN_BS);
+    auto batched_flops = init_batched_flops(TRAIN_BS);
+    auto batched_turns = init_batched_turns(TRAIN_BS);
+    auto batched_rivers = init_batched_rivers(TRAIN_BS);
+    auto batched_fracs = init_batched_fracs(TRAIN_BS);
+    auto batched_status = init_batched_status(TRAIN_BS);
+    auto batched_advs = init_batched_advs(TRAIN_BS);
+    auto batched_iters = init_batched_iters(TRAIN_BS);
+
+    auto batched_advs_a = batched_advs.accessor<float, 2>();
+    auto batched_iters_a = batched_iters.accessor<int, 2>();
+
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         for (int player=0; player<NUM_PLAYERS; ++player) {
             DEBUG_NONE("collecting samples for player = " << player);
@@ -478,32 +455,18 @@ int main() {
             int batch_repeat = train_iters / TRAIN_BS;
             int advs_idx = 0;
 
-            auto batched_hands = init_batched_hands(TRAIN_BS);
-            auto batched_flops = init_batched_flops(TRAIN_BS);
-            auto batched_turns = init_batched_turns(TRAIN_BS);
-            auto batched_rivers = init_batched_rivers(TRAIN_BS);
-            auto batched_fracs = init_batched_fracs(TRAIN_BS);
-            auto batched_status = init_batched_status(TRAIN_BS);
-            auto batched_advs = init_batched_advs(TRAIN_BS);
-            auto batched_iters = init_batched_iters(TRAIN_BS);
-
-            auto batched_advs_a = batched_advs.accessor<float, 2>();
-            auto batched_iters_a = batched_iters.accessor<int, 2>();
-
             for (int _ = 0; _ < batch_repeat; ++_) {
-                for (size_t i = 0; i < TRAIN_BS; ++i) {
-                    if (advs_idx >= train_iters) {
-                        break;
-                    }
+                size_t batch_size = std::min(TRAIN_BS, training_advs.size()-advs_idx);
+                for (size_t i = 0; i < batch_size; ++i) {
                     State *S = training_advs[advs_idx].state.get();
                     update_tensors(
                         S, 
-                        &batched_hands, 
-                        &batched_flops, 
-                        &batched_turns,
-                        &batched_rivers,
-                        &batched_fracs,
-                        &batched_status,
+                        batched_hands, 
+                        batched_flops, 
+                        batched_turns,
+                        batched_rivers,
+                        batched_fracs,
+                        batched_status,
                         i
                     ); 
 
@@ -524,22 +487,21 @@ int main() {
                     train_net->zero_grad();
         
                     auto pred = train_net->forward(
-                        //train_net, 
-                        batched_hands,
-                        batched_flops,
-                        batched_turns,
-                        batched_rivers, 
-                        batched_fracs, 
-                        batched_status
+                        batched_hands.slice(0, 0, batch_size),
+                        batched_flops.slice(0, 0, batch_size),
+                        batched_turns.slice(0, 0, batch_size),
+                        batched_rivers.slice(0, 0, batch_size), 
+                        batched_fracs.slice(0, 0, batch_size), 
+                        batched_status.slice(0, 0, batch_size)
                     );
 
                     auto loss = torch::nn::functional::mse_loss(
                         pred, 
-                        batched_advs,
+                        batched_advs.slice(0, 0, batch_size),
                         torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
                     );
 
-                    loss *= batched_iters;
+                    loss *= batched_iters.slice(0, 0, batch_size);
 
                     auto batch_mean_loss = loss.mean(1).mean();
                     
@@ -551,7 +513,7 @@ int main() {
                 }
             }
 
-            double eval_mbb = evaluate(train_net, player);
+            //double eval_mbb = evaluate(train_net, player);
 
             // todo save nets
             DEBUG_NONE("saving nets..");
