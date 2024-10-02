@@ -1,8 +1,6 @@
-# haetae
+# hete (WIP)
 
-> The haetae is a mythical creature of Chinese origin that possesses the innate ability to determine right from wrong. Resembling a magnificent, armored ox, it questioned officials to discern whether they were corrupt or not. If the official lied, he would be rammed by the haetae's great horns. 
-
-Haetae is a library for training neural network based poker bots. The library comes with a lightweight poker engine, a Deep-CFR implementation, and a 100,000 parameter neural network written in torch. Lightning fast hand evaluations are performed using the fantasic OMPEval library.   
+Hete is a library for training neural network based poker bots. The goal of the library is  The library comes with a lightweight poker engine, a Deep-CFR implementation, and a 100,000 parameter neural network written in torch. Lightning fast hand evaluations are performed using the fantasic OMPEval library.   
 
 # installing 
 

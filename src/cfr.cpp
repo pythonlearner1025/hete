@@ -337,6 +337,8 @@ void init_constants_log(std::string constant_log_file) {
     }
 }
 
+// todo implement reservoir sampling for advs
+
 int main() {
     // Step 1: Get the current date and time at the start of training
     auto now = std::chrono::system_clock::now();
