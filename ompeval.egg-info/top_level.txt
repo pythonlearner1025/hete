@@ -1,2 +1,0 @@
-ompeval
-poker_inference
