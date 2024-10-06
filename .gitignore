@@ -9,6 +9,10 @@ ompeval.cpython-312-darwin.so
 
 *.pt
 
+ompeval.egg-info/
+out/
+*.so
+
 # ignore 
 src/model/model
 src/model/CMakeFiles
