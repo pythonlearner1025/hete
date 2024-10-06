@@ -59,7 +59,10 @@ int2cards = {card2int(card): card for card in all_cards}
 def pad_by(round_bet_history, amt, padding=-1):
     return round_bet_history + [padding] * amt
 
-def card2int(card : Union[Card, str]):
+def card2int(card: Union[Card, str, None]):
+    if card is None:
+        return -1
+        
     """
     Convert a card string (e.g., 'Qc', '6s', 'Jh') to integer representations.
     
