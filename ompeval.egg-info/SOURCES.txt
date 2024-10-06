@@ -1,0 +1,8 @@
+README.md
+setup.py
+lib/eval_binding.cpp
+lib/poker_inference_binding.cpp
+ompeval.egg-info/PKG-INFO
+ompeval.egg-info/SOURCES.txt
+ompeval.egg-info/dependency_links.txt
+ompeval.egg-info/top_level.txt

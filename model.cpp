@@ -398,7 +398,7 @@ void profile_net() {
 }
 int prof() {
     profile_net();
-    torch::jit::script::Module model = torch::jit::load("/Users/minjunes/haetae/jit_compiled_model.pt");
+    torch::jit::script::Module model = torch::jit::load("/Users/minjunes/hete/jit_compiled_model.pt");
     
     // Create dummy input data for a single batch
     int64_t N = 1; // Batch size

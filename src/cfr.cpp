@@ -351,10 +351,10 @@ int main() {
     std::string train_start_datetime = ss.str();
 
     // Create logs directory if it doesn't exist
-    std::filesystem::create_directories("logs");
-
-    std::string logfile = "logs/" + train_start_datetime + "-train.log";
-    std::string const_log_filename = "logs/" + train_start_datetime + "-const.log";
+    std::string run_dir = "../out/" + train_start_datetime;
+    std::filesystem::create_directories(run_dir);
+    std::string logfile = run_dir + "/train.log";
+    std::string const_log_filename = run_dir + "/const.log";
 
     init_constants_log(const_log_filename);
 
@@ -527,15 +527,15 @@ int main() {
                 }
             }
 
-            double eval_mbb = evaluate(train_net, player);
-            DEBUG_NONE("eval mbb = " << eval_mbb);
-            DEBUG_WRITE(logfile, "eval mbb = " << eval_mbb);
+            //double eval_mbb = evaluate(train_net, player);
+            //DEBUG_NONE("eval mbb = " << eval_mbb);
+            //DEBUG_WRITE(logfile, "eval mbb = " << eval_mbb);
 
             // todo save nets
             DEBUG_NONE("saving nets..");
 
-            std::filesystem::path current_path = std::filesystem::current_path();
-            std::string save_path = (current_path / "models" / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
+            std::filesystem::path current_path = run_dir;
+            std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
