@@ -289,13 +289,16 @@ def Act(token, action):
 
 import torch
 
-def regret_match(logits, num_actions):
+def regret_match(logits):
+    if isinstance(logits, list):
+        logits = torch.tensor(logits)
+    n_actions = len(logits)
     relu_logits = torch.relu(logits)
     logits_sum = relu_logits.sum().item()
-    strat = torch.zeros(num_actions)
+    strat = torch.zeros(n_actions)
     if logits_sum > 0:
         strategy_tensor = relu_logits / logits_sum
-        strat = strategy_tensor.cpu().numpy()
+        strat = strategy_tensor.cpu()
     else:
         max_index = torch.argmax(relu_logits).item()
         strat[max_index] = 1.0
@@ -323,6 +326,7 @@ def read_config(file_path):
 
 from poker_inference import forward
 import os
+
 FILE_PATH = 'out/20241005234550/const.log'
 MODELS_PATH = 'out/20241005234550'
 CFR_ITER = -1
@@ -347,7 +351,7 @@ def net_forward(player_idx, hand, board, status, fracs):
     bet_status = status + [0] * (MAX_ROUND_BETS*NUM_PLAYERS*4 - len(status))
     bet_fracs = fracs + [0] * (MAX_ROUND_BETS*NUM_PLAYERS*4 - len(fracs))    
     
-    action = forward(
+    logits = forward(
         player_models[player_idx],
         hand,
         flops,
@@ -356,9 +360,14 @@ def net_forward(player_idx, hand, board, status, fracs):
         bet_fracs,
         bet_status
     )
+    
+    return logits
 
-    print(f'model chosen act: {action}')
-    return action
+def mask_illegals(logits, pot, min_bet_amt):
+    for i in range(2, len(logits)):
+        bet_amt = float(idx2act(i, pot, None)[1:])
+        if bet_amt < min_bet_amt:
+            logits[i] = 0
 
 # action idx 2 slumbot api compatbile act
 # TODO fix betting
@@ -396,8 +405,14 @@ def PlayHand(token):
     #  Blinds of 50 and 100, stack sizes of 200 BB
     status = [] 
     fracs = [] 
+    stack = 100*200
     pot = 150
-    client_last_bet = 0
+
+    # big blind
+    client_last_bet = 50
+    # small blind
+    if r.get('client_pos') == 0:
+        client_last_bet = 100
 
     while True:
         print('-----------------')
@@ -408,6 +423,8 @@ def PlayHand(token):
         hole_cards = r.get('hole_cards')
         board = r.get('board')
         winnings = r.get('winnings')
+        if 'session_baseline_total' in r:
+            baseline_totals.append(r.get("session_baseline_total"))
         print('Action: %s' % action)
         if client_pos:
             print('Client pos: %i' % client_pos)
@@ -429,15 +446,13 @@ def PlayHand(token):
         status.append(1 if bet_frac > 0 else 0) 
         fracs.append(bet_frac)
         pot += last_bet
-        # This sample program implements a naive strategy of "always check or call".
-        # if i will go over max_round_bets, fold.
-        # if action == '' that means we should open
+
         if action != '' and len(status) >= round * MAX_ROUND_BETS * 2:
             client_act = 'f'
         else:
             #if a['last_bettor'] != -1:, then you must cbr
             player_idx = 1 if client_pos == 0 else 0
-            actidx = net_forward(
+            logits = net_forward(
                 player_idx,
                 hole_cards,
                 board,
@@ -445,26 +460,47 @@ def PlayHand(token):
                 fracs
             )
             can_check = a['last_bettor'] == -1
+            min_bet_amt = a['total_last_bet_to'] - client_last_bet
+            print(f'min_bet_amt: {min_bet_amt}')
+            mask_illegals(logits, pot, min_bet_amt)
+            actidx = torch.argmax(regret_match(logits)).item()
             client_act = idx2act(actidx, pot, can_check)
             # check validity...
-            if client_act == 'c':
-                call_amt = client_last_bet - a['total_last_bet_to']
+            if client_act == 'f':
+                pass
+            elif client_act == 'c':
+                call_amt = min_bet_amt
                 bet_frac = call_amt / pot
+                if call_amt > stack:
+                    call_amt = stack
+                    bet_frac = call_amt / pot
                 status.append(1)
                 fracs.append(bet_frac)
                 client_last_bet = a['total_last_bet_to']
                 pot += call_amt
+                stack -= call_amt
             elif client_act == 'k':
+                print(f'last bet size: {a["last_bet_size"]}')
                 status.append(0)
                 fracs.append(0)
                 client_last_bet = a['total_last_bet_to']
             else:
+                print("betting")
+                print(f"raw client act: {client_act}")
                 bet_amt = float(client_act[1:])
                 bet_frac = bet_amt / pot
+                if round == 0 and a['street_last_bet_to']:
+                    incr = 150 
+                else:
+                    incr = a['street_last_bet_to'] 
+                print(f'incr: {incr}')
+                print(f'bet_amt: {bet_amt}')
+                client_act = f'b{int(incr+bet_amt)}'
                 status.append(1)
                 fracs.append(bet_frac)
                 client_last_bet = a['total_last_bet_to'] + bet_amt       
                 pot += bet_amt
+                stack -= bet_amt
         print('Sending incremental action: %s' % client_act)
         r = Act(token, client_act)
     # Should never get here
@@ -499,8 +535,9 @@ def Login(username, password):
         sys.exit(-1)
     return token
 
-
 def main():
+    global baseline_totals 
+    baseline_totals = []
     parser = argparse.ArgumentParser(description='Slumbot API example')
     parser.add_argument('--username', type=str)
     parser.add_argument('--password', type=str)
@@ -515,13 +552,14 @@ def main():
     # To avoid SSLError:
     #   import urllib3
     #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    num_hands = 10
+    num_hands = 100
     winnings = 0
     for h in range(num_hands):
         (token, hand_winnings) = PlayHand(token)
         winnings += hand_winnings
     print('Total winnings: %i' % winnings)
-
+    print('bb/100: ', winnings/150)
+    print('session_baseline_total avg: ', sum(baseline_totals)/len(baseline_totals))
     
 if __name__ == '__main__':
     main()

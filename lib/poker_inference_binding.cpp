@@ -70,7 +70,7 @@ torch::Tensor regret_match(const torch::Tensor& batched_logits) {
 
     return strategy;
 }
-int forward(
+std::vector<float> forward(
     const std::string& model_path,
     const std::vector<int>& hand, 
     const std::vector<int>& flops,
@@ -133,15 +133,14 @@ int forward(
         b_status
     );
 
-    auto strat = regret_match(logits);
-
-    // Perform argmax on the first dimension
-    torch::Tensor argmax_result = torch::argmax(strat, 1);
+    // Convert the strategy tensor to a std::vector<float>
+    std::vector<float> logits_values(logits.size(1));
+    auto logits_accessor = logits.accessor<float, 2>();
+    for (int i = 0; i < logits.size(1); ++i) {
+        logits_values[i] = logits_accessor[0][i];
+    }
     
-    // Get the integer value of the argmax result
-    int action = argmax_result.item<int>();
-    
-    return action;
+    return logits_values;
 }
 
 PYBIND11_MODULE(poker_inference, m) {
