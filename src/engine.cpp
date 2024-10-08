@@ -156,6 +156,7 @@ bool PokerEngine::can_bet_or_raise(int player, double amount) const {
     DEBUG_INFO("answer: " << ret);
     return ret;
 }
+
 // side pot:
 // when a player calls or bets when 
 // their total stack < min_bet_amt 
