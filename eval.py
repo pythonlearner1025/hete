@@ -244,21 +244,22 @@ def Act(token, action):
         
     return r
 
-import torch
+import numpy as np
 
 def regret_match(logits):
     if isinstance(logits, list):
-        logits = torch.tensor(logits)
+        logits = np.array(logits)
     n_actions = len(logits)
-    relu_logits = torch.relu(logits)
-    logits_sum = relu_logits.sum().item()
-    strat = torch.zeros(n_actions)
+    relu_logits = np.maximum(logits, 0)  # ReLU operation
+    logits_sum = relu_logits.sum()
+    strat = np.zeros(n_actions)
+    
     if logits_sum > 0:
-        strategy_tensor = relu_logits / logits_sum
-        strat = strategy_tensor.cpu()
+        strat = relu_logits / logits_sum
     else:
-        max_index = torch.argmax(relu_logits).item()
+        max_index = np.argmax(relu_logits)
         strat[max_index] = 1.0
+        
     return strat
 
 def read_config(file_path):
@@ -349,6 +350,7 @@ def PlayHand(token):
     fracs = [] 
     stack = 100*200
     pot = 150
+    round = 0
 
     # big blind
     client_last_bet = 50
@@ -360,7 +362,10 @@ def PlayHand(token):
         print('-----------------')
         print(repr(r))
         action = r.get('action')
-        round = action.count('/')
+        newround = action.count('/')
+        if newround != round:
+            client_last_bet = 0
+            round = newround
         client_pos = r.get('client_pos')
         hole_cards = r.get('hole_cards')
         board = r.get('board')
@@ -405,7 +410,7 @@ def PlayHand(token):
             min_bet_amt = a['street_last_bet_to'] - client_last_bet
             print(f'min_bet_amt: {min_bet_amt}')
             mask_illegals(logits, pot, min_bet_amt)
-            actidx = torch.argmax(regret_match(logits)).item()
+            actidx = np.argmax(regret_match(logits)).item()
             client_act = idx2act(actidx, pot, can_check)
             # check validity...
             if client_act == 'f':
@@ -531,10 +536,15 @@ if __name__ == '__main__':
     # To avoid SSLError:
     #   import urllib3
     #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    errors = []
     winnings = 0
     for h in range(num_hands):
-        (token, hand_winnings) = PlayHand(token)
-        winnings += hand_winnings
+        try:
+            (token, hand_winnings) = PlayHand(token)
+            winnings += hand_winnings
+        except Exception as e:
+            print(f"skipping hand {h} due to error: {e}")
+            errors.append(str(e))
     
     eval_results = {
         'eval_cfr_iter': eval_cfr_iter,
@@ -548,3 +558,7 @@ if __name__ == '__main__':
             log_line = f'{key} = {value}\n'
             f.write(log_line)
             print(log_line.strip())  # Print without the newline character
+    
+    with open(f'{log_path}/eval_errs.log', 'a') as f:
+        for err in errors:
+            f.write(err + '\n')
