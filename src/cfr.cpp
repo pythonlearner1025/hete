@@ -30,7 +30,7 @@ struct Advantage {
     std::array<bool, NUM_ACTIONS> is_illegal;
     std::weak_ptr<Advantage> parent;
     int parent_action;
-    std::shared_ptr<State> state;
+    State state;
     int depth;
     int unprocessed_children;
 
@@ -43,7 +43,7 @@ struct Advantage {
         const std::array<bool, NUM_ACTIONS>& is_illegal_ = {},
         const std::shared_ptr<Advantage>& parent_adv = nullptr,
         int parent_action_ = -1,
-        const std::shared_ptr<State>& state_ = nullptr,
+        const State state_ = {},
         int depth_ = 0,
         int num_children = 0
     ) :
@@ -172,7 +172,7 @@ void iterative_traverse(
                     is_illegal,
                     parent_advantage,
                     parent_action,
-                    state,
+                    *state,
                     depth + 1,
                     num_children
                 );
@@ -192,7 +192,7 @@ void iterative_traverse(
                 int actor = engine.turn();
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
-                update_tensors(state.get(), hands, flops, turns, rivers, bet_fracs, bet_status);
+                update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
                 DeepCFRModel net_ptr = nets[actor];
                 if (net_ptr.get() == nullptr) {
@@ -233,7 +233,7 @@ void iterative_traverse(
                 //DEBUG_NONE("udt");
                 auto& adv = all_advs[advs_idx];
                 update_tensors(
-                    adv->state.get(),
+                    adv->state,
                     batched_hands,
                     batched_flops,
                     batched_turns,
@@ -477,7 +477,7 @@ int main() {
             for (int _ = 0; _ < batch_repeat; ++_) {
                 size_t batch_size = std::min(TRAIN_BS, training_advs.size()-advs_idx);
                 for (size_t i = 0; i < batch_size; ++i) {
-                    State *S = training_advs[advs_idx].state.get();
+                    State S = training_advs[advs_idx].state;
                     update_tensors(
                         S, 
                         batched_hands, 
@@ -534,6 +534,7 @@ int main() {
             }
 
             //double eval_mbb = evaluate(train_net, player);
+            
             //DEBUG_NONE("eval mbb = " << eval_mbb);
             //DEBUG_WRITE(logfile, "eval mbb = " << eval_mbb);
 

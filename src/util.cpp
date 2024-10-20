@@ -1,7 +1,7 @@
 #include "util.h"
 
 void update_tensors(
-    const State* S, 
+    const State S, 
     torch::Tensor hand, 
     torch::Tensor flop, 
     torch::Tensor turn, 
@@ -20,28 +20,28 @@ void update_tensors(
 
     // Update hand cards (first two cards)
     for (int i = 0; i < 2; ++i) {
-        hand_a[batch][i] = S->hand[i];
+        hand_a[batch][i] = S.hand[i];
     }
 
     // Update flop cards (next three cards)
     for (int i = 0; i < 3; ++i) {
-        flop_a[batch][i] = S->flop[i];
+        flop_a[batch][i] = S.flop[i];
     }
 
     // Update turn card
-    turn_a[batch][0] = S->turn[0];
+    turn_a[batch][0] = S.turn[0];
 
     // Update river card
-    river_a[batch][0] = S->river[0];
+    river_a[batch][0] = S.river[0];
 
     // Update bet fractions
     for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_a[batch][i] = S->bet_fracs[i];
+        bet_fracs_a[batch][i] = S.bet_fracs[i];
     }
 
     // Update bet status
     for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_status_a[batch][i] = S->bet_status[i];
+        bet_status_a[batch][i] = S.bet_status[i];
     }
 }
 

@@ -13,7 +13,7 @@
 
 // Define a structure for traverse advantages
 struct TraverseAdvantage {
-    std::shared_ptr<State> state;
+    State state;
     int iteration;
     std::array<double, NUM_ACTIONS> advantages;
 };
