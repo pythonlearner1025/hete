@@ -429,7 +429,7 @@ int get_lbr_act(
                 for (size_t j=0; j<MAX_OPP_RANGE; ++j) {
                     float curr_hand_prob = opp_ranges[i][j]; 
                     std::array<int, 2> opp_hand = card_lookup_table[j];
-                    update_tensors(state.get(), hands, flops, turns, rivers, bet_fracs, bet_status);
+                    update_tensors(*state.get(), hands, flops, turns, rivers, bet_fracs, bet_status);
                     torch::Tensor logits = policy_net->forward(
                         hands, 
                         flops, 
@@ -623,7 +623,7 @@ int get_lbr_act(
                 get_state(engine, opp_state.get(), opp_idx);
                 std::array<int, 2> cf_hand = card_lookup_table[hand_idx];
                 update_tensors(
-                    opp_state.get(),
+                    *opp_state.get(),
                     batched_hands,
                     batched_flops,
                     batched_turns,
@@ -736,7 +736,7 @@ double evaluate(
                 DEBUG_INFO("Player's turn");
                 auto state = std::make_shared<State>();
                 get_state(engine, state.get(), player);
-                update_tensors(state.get(), hands, flops, turns, rivers, fracs, status);
+                update_tensors(*state.get(), hands, flops, turns, rivers, fracs, status);
                 auto logits = policy_net->forward(
                     hands, 
                     flops, 

@@ -1,52 +1,9 @@
-# The API utilizes HTTP POST requests.  Requests and responses have a JSON body.
-# There are three endpoints:
-#   /api/login
-#   /api/new_hand
-#   /api/act
-# To initiate a new hand, send a request to /api/new_hand.  To take an action, send a
-# request to /api/act.
-#
-# The body of a sample request to /api/new_hand:
-#   {"token": "a2f42f44-7ff6-40dd-906b-4c2f03fcee57"}
-# The body of a sample request to /api/act:
-#   {"token": "a2f42f44-7ff6-40dd-906b-4c2f03fcee57", "incr": "c"}
-#
-# A sample response from /api/new_hand or /api/act:
-#   {'old_action': '', 'action': 'b200', 'client_pos': 0, 'hole_cards': ['Ac', '9d'], 'board': [], 'token': 'a2f42f44-7ff6-40dd-906b-4c2f03fcee57'}
-#
-# Note that if the bot is first to act, then the response to /api/new_hand will contain the
-# bot's initial action.
-#
-# A token should be passed into every request.  With the exception that on the initial request to
-# /api/new_hand, the token may be missing.  But all subsequent requests should contain a token.
-# The token can in theory change over the course of a session (usually only if there is a long
-# pause) so always check if there is a new token in a response and use it going forward.
-#
-# A client_pos of 0 indicates that you are the big blind (second to act preflop, first to act
-# postflop).  1 indicates you are the small blind.
-#
-# Sample action that you might get in a response looks like this:
-#   b200c/kk/kk/kb200
-# An all-in can contain streets with no action.  For example:
-#   b20000c///
-#
-# "k" indicates "check", "c" indicates "call", "f" indicates "fold" and "b" indicates "bet"
-# (either an initial bet or a raise).
-#
-# Bet sizes are the number of chips that the player has put into the pot *on that street* (only).
-# Consider this action:
-#
-#   b200c/kb400
-#
-# The flop bet here is a pot-size bet to 400 because there are 400 chips in the pot after the
-# preflop action.  If the bet is called, then each player will have put a total of 600 chips into
-# the pot counting both the preflop and the flop.
-# 
-# Slumbot plays with blinds of 50 and 100 and a stack size of 200 BB (20,000 chips).  The stacks
-# reset after each hand.
+from poker_inference import forward
+
 import requests
 import sys
 import argparse
+import os
 
 host = 'slumbot.com'
 
@@ -324,22 +281,7 @@ def read_config(file_path):
             config.get('NUM_ACTIONS'),
             config.get('MAX_ROUND_BETS'))
 
-from poker_inference import forward
-import os
 
-FILE_PATH = 'out/20241008003136/const.log'
-MODELS_PATH = 'out/20241008003136'
-CFR_ITER = -1
-NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
-
-player_models = dict()
-for i in range(NUM_PLAYERS):
-    assert CFR_ITER == -1 or CFR_ITER < len(os.listdir(MODELS_PATH))
-    only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
-    print(only_dirs)
-    iter_models = sorted(only_dirs)[CFR_ITER]
-    path = os.path.join(MODELS_PATH, iter_models, str(i), 'model.pt')
-    player_models[i] = path
 
 def net_forward(player_idx, hand, board, status, fracs):
     assert len(status) == len(fracs)
@@ -535,8 +477,23 @@ def Login(username, password):
         sys.exit(-1)
     return token
 
-def main():
-    global baseline_totals 
+if __name__ == '__main__':
+    global baseline_totals, NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS
+
+    FILE_PATH = 'out/20241008003136/const.log'
+    MODELS_PATH = 'out/20241008003136'
+    CFR_ITER = -1
+    NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
+
+    player_models = dict()
+    for i in range(NUM_PLAYERS):
+        assert CFR_ITER == -1 or CFR_ITER < len(os.listdir(MODELS_PATH))
+        only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
+        print(only_dirs)
+        iter_models = sorted(only_dirs)[CFR_ITER]
+        path = os.path.join(MODELS_PATH, iter_models, str(i), 'model.pt')
+        player_models[i] = path
+
     baseline_totals = []
     parser = argparse.ArgumentParser(description='Slumbot API example')
     parser.add_argument('--username', type=str)
@@ -561,5 +518,3 @@ def main():
     print('bb/100: ', winnings/150)
     print('session_baseline_total avg: ', sum(baseline_totals)/len(baseline_totals))
     
-if __name__ == '__main__':
-    main()

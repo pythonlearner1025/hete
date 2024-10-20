@@ -18,7 +18,7 @@ struct State {
 };
 
 void update_tensors(
-    const State* S, 
+    const State S, 
     torch::Tensor hand, 
     torch::Tensor flop, 
     torch::Tensor turn, 
