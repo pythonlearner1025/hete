@@ -327,8 +327,8 @@ def read_config(file_path):
 from poker_inference import forward
 import os
 
-FILE_PATH = 'out/20241005234550/const.log'
-MODELS_PATH = 'out/20241005234550'
+FILE_PATH = 'out/20241008003136/const.log'
+MODELS_PATH = 'out/20241008003136'
 CFR_ITER = -1
 NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 

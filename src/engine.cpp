@@ -277,7 +277,6 @@ void PokerEngine::check_or_call(int player) {
     next_state();
 }
 
-
 // get the min amt player's bet must be to keep playing
 double PokerEngine::calc_min_bet_amt(int player) const {
     double min_bet = 0.0;
@@ -290,7 +289,6 @@ double PokerEngine::calc_min_bet_amt(int player) const {
     return min_bet;
 }
 
-
 bool PokerEngine::verify_min_raise(int player, double amount) const {
     if (!verify_sufficient_funds(player, amount)) return false;
     return amount + this->players[player].total_bet >= calc_min_bet_amt(player); 
@@ -300,7 +298,6 @@ bool PokerEngine::verify_sufficient_funds(int player, double amount) const {
     if (this->players[player].stack < amount) return false;
     return true;
 }
-
 
 void PokerEngine::reset(
     std::array<double, NUM_PLAYERS> starting_stacks, 

@@ -3,8 +3,8 @@
 
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
-constexpr size_t NUM_TRAVERSALS = 1000;
-constexpr size_t MAX_SIZE = 4e8; // Adjust this based on your expected maximum number of advantages
+constexpr size_t NUM_TRAVERSALS = 300;
+constexpr size_t MAX_SIZE = 3e8; // Adjust this based on your expected maximum number of advantages
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 6;
 constexpr size_t CFR_ITERS = 300;
@@ -15,12 +15,12 @@ constexpr int MAX_ROUND_BETS = 3;
 constexpr int BOARD_SIZE = 5;
 
 // model 
-constexpr int64_t MODEL_DIM = 256;
+constexpr int64_t MODEL_DIM = 512;
 
 // training
 constexpr size_t TRAIN_BS = 1024;
 constexpr size_t TRAIN_EPOCHS = 10;
-constexpr size_t TRAIN_ITERS = 16000;
+constexpr size_t TRAIN_ITERS = 32000;
 
 // eval
 constexpr size_t EVAL_BS = 100000;
