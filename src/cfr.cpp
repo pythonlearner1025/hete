@@ -20,7 +20,7 @@ struct RandInit {
 } rand_init;
 
 std::vector<TraverseAdvantage> global_advs{};
-std::atomic<size_t> global_index(0);
+std::atomic<size_t> total_advs(0);
 constexpr double NULL_VALUE = -42.0;
 
 // Adjusted Advantage struct with smart pointers
@@ -128,9 +128,7 @@ void iterative_traverse(
     auto batched_status = init_batched_status(TRAIN_BS);
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
-        int num_advs = global_index.load();
-        if (num_advs >= MAX_SIZE) break;
-
+        int num_advs = total_advs.load();
         DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal << " advs=" << num_advs);
 
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
@@ -303,9 +301,16 @@ void iterative_traverse(
                 }
             }
 
-            size_t add_idx = global_index.fetch_add(1);
-            if (add_idx < MAX_SIZE) {
-                global_advs[add_idx] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+            size_t current_total = total_advs.fetch_add(1);
+            if (current_total < MAX_SIZE) {
+                // Directly add to global_advs
+                global_advs[current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+            } else {
+                // Use reservoir sampling
+                size_t r = std::rand() % (current_total + 1);
+                if (r < MAX_SIZE) {
+                    global_advs[r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+                }
             }
 
             if (terminal_adv->parent.expired()) {
@@ -449,16 +454,17 @@ int main() {
             DeepCFRModel train_net;
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
-            DEBUG_NONE("COLLECTED ADVS = " << global_index.load());
-            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << global_index.load());
+            DEBUG_NONE("COLLECTED ADVS = " << total_advs.load());
+            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs.load());
             // todo train
             // draw training samples
             std::random_device rd;
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
-            std::shuffle(global_advs.begin(), global_advs.begin() + global_index.load(), rng);
+            size_t safe_size = std::min(total_advs.load(), global_advs.size());
+            std::shuffle(global_advs.begin(), global_advs.begin() + safe_size, rng);
             std::vector<TraverseAdvantage> training_advs;
-            size_t train_iters = std::min(TRAIN_ITERS, static_cast<size_t>(global_index.load()));
+            size_t train_iters = std::min(TRAIN_ITERS, safe_size);
             for (size_t i = 0; i < train_iters; ++i) {
                 training_advs.push_back(global_advs[i]);
             }
