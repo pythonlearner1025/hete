@@ -486,7 +486,7 @@ int main() {
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
 
             // eval saved net
-            std::string command = "source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+            std::string command = ". ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
             int result = system(command.c_str());
