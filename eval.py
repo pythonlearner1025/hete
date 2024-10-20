@@ -402,14 +402,18 @@ def PlayHand(token):
                 fracs
             )
             can_check = a['last_bettor'] == -1
-            min_bet_amt = a['total_last_bet_to'] - client_last_bet
+            min_bet_amt = a['street_last_bet_to'] - client_last_bet
             print(f'min_bet_amt: {min_bet_amt}')
             mask_illegals(logits, pot, min_bet_amt)
             actidx = torch.argmax(regret_match(logits)).item()
             client_act = idx2act(actidx, pot, can_check)
             # check validity...
             if client_act == 'f':
-                pass
+                if r['action'][-1] == 'k':
+                    client_act = 'k'
+                    status.append(0)
+                    fracs.append(0)
+                    client_last_bet = a['street_last_bet_to']
             elif client_act == 'c':
                 call_amt = min_bet_amt
                 bet_frac = call_amt / pot
@@ -418,31 +422,41 @@ def PlayHand(token):
                     bet_frac = call_amt / pot
                 status.append(1)
                 fracs.append(bet_frac)
-                client_last_bet = a['total_last_bet_to']
+                client_last_bet = a['street_last_bet_to']
                 pot += call_amt
                 stack -= call_amt
             elif client_act == 'k':
                 print(f'last bet size: {a["last_bet_size"]}')
                 status.append(0)
                 fracs.append(0)
-                client_last_bet = a['total_last_bet_to']
+                client_last_bet = a['street_last_bet_to']
             else:
                 print("betting")
                 print(f"raw client act: {client_act}")
                 bet_amt = float(client_act[1:])
-                bet_frac = bet_amt / pot
-                if round == 0 and a['street_last_bet_to']:
-                    incr = 150 
+                if bet_amt == 0.0:
+                    client_act = 'k'
+                    print(f'last bet size: {a["last_bet_size"]}')
+                    status.append(0)
+                    fracs.append(0)
+                    client_last_bet = a['street_last_bet_to']
                 else:
-                    incr = a['street_last_bet_to'] 
-                print(f'incr: {incr}')
-                print(f'bet_amt: {bet_amt}')
-                client_act = f'b{int(incr+bet_amt)}'
-                status.append(1)
-                fracs.append(bet_frac)
-                client_last_bet = a['total_last_bet_to'] + bet_amt       
-                pot += bet_amt
-                stack -= bet_amt
+                    bet_frac = bet_amt / pot
+                    if round == 0 and a['street_last_bet_to']:
+                        # still don't understand why it's 150 instead of 100
+                        incr = 150 
+                    else:
+                        incr = a['street_last_bet_to'] 
+                    print(f'incr: {incr}')
+                    print(f'bet_amt: {bet_amt}')
+                    print(f'post_bet_amt: {int(incr+bet_amt)}')
+                    post_bet_amt = int(incr+bet_amt)
+                    client_act = f'b{post_bet_amt}'
+                    status.append(1)
+                    fracs.append(bet_frac)
+                    client_last_bet = a['street_last_bet_to'] + bet_amt       
+                    pot += bet_amt
+                    stack -= bet_amt
         print('Sending incremental action: %s' % client_act)
         r = Act(token, client_act)
     # Should never get here
@@ -480,27 +494,35 @@ def Login(username, password):
 if __name__ == '__main__':
     global baseline_totals, NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS
 
-    FILE_PATH = 'out/20241008003136/const.log'
-    MODELS_PATH = 'out/20241008003136'
+    baseline_totals = []
+    parser = argparse.ArgumentParser(description='Slumbot API example')
+    parser.add_argument('--username', type=str, default="")
+    parser.add_argument('--password', type=str, default="")
+    parser.add_argument('--log_path', type=str)
+    parser.add_argument('--num_hands', type=int, default=100)
+    args = parser.parse_args()
+    username = args.username
+    password = args.password
+    log_path = args.log_path
+    num_hands = args.num_hands
+
+    FILE_PATH = f'{log_path}/const.log'
+    MODELS_PATH = log_path
     CFR_ITER = -1
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
     player_models = dict()
+
+    # init player models with model from latest cfr iter
+    eval_cfr_iter = 1 # default cfr iter is 1
     for i in range(NUM_PLAYERS):
         assert CFR_ITER == -1 or CFR_ITER < len(os.listdir(MODELS_PATH))
         only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
         print(only_dirs)
-        iter_models = sorted(only_dirs)[CFR_ITER]
-        path = os.path.join(MODELS_PATH, iter_models, str(i), 'model.pt')
-        player_models[i] = path
+        eval_cfr_iter = sorted(only_dirs)[CFR_ITER]
+        path = os.path.join(MODELS_PATH, eval_cfr_iter, str(i), 'model.pt')
+        player_models[i] = path   
 
-    baseline_totals = []
-    parser = argparse.ArgumentParser(description='Slumbot API example')
-    parser.add_argument('--username', type=str)
-    parser.add_argument('--password', type=str)
-    args = parser.parse_args()
-    username = args.username
-    password = args.password
     if username and password:
         token = Login(username, password)
     else:
@@ -509,12 +531,20 @@ if __name__ == '__main__':
     # To avoid SSLError:
     #   import urllib3
     #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    num_hands = 100
     winnings = 0
     for h in range(num_hands):
         (token, hand_winnings) = PlayHand(token)
         winnings += hand_winnings
-    print('Total winnings: %i' % winnings)
-    print('bb/100: ', winnings/150)
-    print('session_baseline_total avg: ', sum(baseline_totals)/len(baseline_totals))
     
+    eval_results = {
+        'eval_cfr_iter': eval_cfr_iter,
+        'total_winnings': winnings,
+        'bb_per_100': winnings/150,
+        'session_baseline_total_avg': sum(baseline_totals)/len(baseline_totals) if baseline_totals else 0
+    }
+    
+    with open(f'{log_path}/eval.log', 'a') as f:
+        for key, value in eval_results.items():
+            log_line = f'{key} = {value}\n'
+            f.write(log_line)
+            print(log_line.strip())  # Print without the newline character

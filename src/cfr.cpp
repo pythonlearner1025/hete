@@ -7,14 +7,13 @@
 #include <atomic>
 #include <set>
 #include <algorithm>
-#include <cstdlib> // For rand()
-#include <ctime>   // For seeding rand()
+#include <cstdlib> 
+#include <ctime>   
 #include <chrono>
-#include <iomanip> // For std::put_time
-#include <sstream> // For std::stringstream
+#include <iomanip> 
+#include <sstream> 
 #include <memory>
 
-// Initialize random seed
 struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
@@ -23,7 +22,6 @@ std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> total_advs(0);
 constexpr double NULL_VALUE = -42.0;
 
-// Adjusted Advantage struct with smart pointers
 struct Advantage {
     std::array<double, NUM_ACTIONS> values;
     std::array<double, NUM_ACTIONS> strat;
@@ -56,48 +54,21 @@ struct Advantage {
         depth(depth_),
         unprocessed_children(num_children)
     {
-        // Initialize values to 0 if not provided
         if (values_.empty()) {
             values.fill(0.0);
         }
 
-        // Initialize strat to uniform distribution if not provided
         if (strat_.empty()) {
             double uniform_prob = 1.0 / NUM_ACTIONS;
             strat.fill(uniform_prob);
         }
 
-        // Initialize is_illegal to false if not provided
         if (is_illegal_.empty()) {
             is_illegal.fill(false);
         }
     }
 };
 
-void print_strategy(const std::array<double, NUM_ACTIONS>& strat, int chosen_act) {
-    const std::array<std::string, NUM_ACTIONS> action_names = {"Fold", "Check/Call", "Bet/Raise"};
-    
-    std::cout << "\nStrategy probabilities:\n";
-    std::cout << std::string(30, '-') << "\n";
-    std::cout << std::setw(15) << "Action" << " | " << std::setw(10) << "Probability" << "\n";
-    std::cout << std::string(30, '-') << "\n";
-    
-    for (size_t i = 0; i < NUM_ACTIONS; ++i) {
-        std::cout << std::setw(15) << action_names[i] << " | " 
-                  << std::setw(10) << std::fixed << std::setprecision(4) << strat[i] << "\n";
-    }
-    
-    std::cout << std::string(30, '-') << "\n";
-    std::cout << std::setw(15) << "Chosen action:" << std::to_string(chosen_act) << "\n";
-    std::cout << std::string(30, '-') << "\n";
-}
-
-// Adjusted iterative_traverse function
-// past: 0.3 iter / sec
-
-// so one possible cause for use-after-free is if in update_tensor
-// instead of updating the memory location at each batch_tensor,
-// im updating the batch_tensor's pointer to stack pointers in Advantage->State
 void iterative_traverse(
     int thread_id,
     int player,
@@ -112,7 +83,6 @@ void iterative_traverse(
 ) {
     PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
 
-    // auto doesn't fix it
     auto hands = init_batched_hands(1);
     auto flops = init_batched_flops(1);
     auto turns = init_batched_turns(1);
@@ -245,12 +215,6 @@ void iterative_traverse(
                 advs_idx++;
             }
 
-            // accessing freed pointer error
-            // occurs in both single and multi thread
-            // checking if this is libtorch problem or my code problem
-            // check if model_ptr changed
-            //DEBUG_NONE("batch_size = " << batch_size);
-            //DEBUG_NONE("model_ptr = " << nets[player]);
             auto logits = nets[player]->forward(
                 batched_hands.slice(0,0,batch_size),
                 batched_flops.slice(0,0,batch_size),
@@ -263,7 +227,6 @@ void iterative_traverse(
             auto regrets = regret_match_batched(logits);
             auto regrets_a = regrets.accessor<float, 2>();
 
-            // Then update the loop that uses regrets:
             for (size_t i = 0; i < batch_size; ++i) {
                 auto& adv = all_advs[advs_idx-batch_size+i];
 
@@ -303,10 +266,8 @@ void iterative_traverse(
 
             size_t current_total = total_advs.fetch_add(1);
             if (current_total < MAX_SIZE) {
-                // Directly add to global_advs
                 global_advs[current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
             } else {
-                // Use reservoir sampling
                 size_t r = std::rand() % (current_total + 1);
                 if (r < MAX_SIZE) {
                     global_advs[r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
@@ -342,20 +303,15 @@ void init_constants_log(std::string constant_log_file) {
     }
 }
 
-// todo implement reservoir sampling for advs
-
 int main() {
-    // Step 1: Get the current date and time at the start of training
     auto now = std::chrono::system_clock::now();
     std::time_t now_time = std::chrono::system_clock::to_time_t(now);
     std::tm *ltm = std::localtime(&now_time);
 
-    // Step 2: Create the log file paths using the current date and time
     std::stringstream ss;
     ss << std::put_time(ltm, "%Y%m%d%H%M%S");
     std::string train_start_datetime = ss.str();
 
-    // Create logs directory if it doesn't exist
     std::string run_dir = "../out/" + train_start_datetime;
     std::filesystem::create_directories(run_dir);
     std::string logfile = run_dir + "/train.log";
@@ -370,7 +326,6 @@ int main() {
             DeepCFRModel model;
             nets[i][j] = model;
             if (nets[i][j].get() == nullptr) DEBUG_NONE("null ptr at init");
-            //else DEBUG_NONE("player " << j << " = " << nets[i][j]);
         }
     }
     
@@ -390,7 +345,6 @@ int main() {
     double big_bet = 1.0;
     int starting_actor = 0;
 
-    // Modify the thread_func to use iterative_traverse
     auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<DeepCFRModel, NUM_PLAYERS>& nets) {
         try {
             iterative_traverse(
@@ -425,11 +379,7 @@ int main() {
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         for (int player=0; player<NUM_PLAYERS; ++player) {
-            //DEBUG_NONE("collecting samples for player = " << player);
-            // spawn threads
             std::vector<std::thread> threads;
-            // In the main function, modify the thread creation part:
-            // Modify the thread creation part
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
                 
@@ -443,21 +393,19 @@ int main() {
                     }
                 );
             } 
-            // Wait for all threads to finish
+
             for(auto& thread : threads) {
                 if(thread.joinable()) {
                     thread.join();
                 }
             }
 
-            // define fresh net to train
+            // fresh net to train
             DeepCFRModel train_net;
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << total_advs.load());
             DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs.load());
-            // todo train
-            // draw training samples
             std::random_device rd;
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -497,11 +445,8 @@ int main() {
                     advs_idx++;
                 }
 
-                // train
-                //torch::autograd::GradMode::set_enabled(true);
                 torch::optim::Adam optimizer(train_net->parameters());
 
-                // maximum 50 million samples
                 for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
                     train_net->zero_grad();
         
@@ -533,20 +478,24 @@ int main() {
                 }
             }
 
-            //double eval_mbb = evaluate(train_net, player);
-            
-            //DEBUG_NONE("eval mbb = " << eval_mbb);
-            //DEBUG_WRITE(logfile, "eval mbb = " << eval_mbb);
-
-            // todo save nets
-            DEBUG_NONE("saving nets..");
-
             std::filesystem::path current_path = run_dir;
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
+
+            // eval saved net
+            std::string export_dyld = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && ";
+            std::string command = export_dyld + "source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+            DEBUG_NONE("Executing command: " << command);
+            DEBUG_WRITE(logfile, "Executing command: " << command);
+            int result = system(command.c_str());
+            if (result == 0) {
+                DEBUG_NONE("Evaluation script executed successfully");
+            } else {
+                DEBUG_NONE("Error executing evaluation script. Return code: " << result);
+            }
 
             if (std::filesystem::exists(save_path)) {
                 DEBUG_NONE("File successfully created at " << save_path);
