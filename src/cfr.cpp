@@ -11,6 +11,7 @@
 #include <ctime>   
 #include <chrono>
 #include <iomanip> 
+#include <cmath>
 #include <sstream> 
 #include <memory>
 
@@ -70,6 +71,28 @@ struct Advantage {
     }
 };
 
+auto format_scientific = [](int number) -> std::string {
+    if (number == 0) {
+        return "0.0e0";
+    }
+    double mantissa = number;
+    int exponent = 0;
+
+    exponent = static_cast<int>(std::floor(std::log10(std::abs(mantissa))));
+    mantissa /= std::pow(10, exponent);
+    mantissa = std::round(mantissa * 10.0) / 10.0;  // Round to one decimal place
+
+    // Handle cases where rounding affects the mantissa and exponent
+    if (mantissa >= 10.0) {
+        mantissa /= 10.0;
+        exponent += 1;
+    }
+
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << mantissa << "e" << exponent;
+    return oss.str();
+};
+
 void iterative_traverse(
     int thread_id,
     int player,
@@ -101,9 +124,11 @@ void iterative_traverse(
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
         int n_total_advs = total_advs.load();
         int n_cfr_advs = cfr_iter_advs.load();
-        DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal 
-           << " Cfr_iter_advs=" << std::scientific << std::setprecision(1) << n_cfr_advs / std::pow(10, std::floor(std::log10(n_cfr_advs))) << "e" << std::floor(std::log10(n_cfr_advs))
-           << " Total_advs=" << std::scientific << std::setprecision(1) << n_total_advs / std::pow(10, std::floor(std::log10(n_total_advs))) << "e" << std::floor(std::log10(n_total_advs)));
+        DEBUG_NONE("Thread=" << thread_id
+               << " Iter=" << traversal
+               << " Cfr_iter_advs=" << format_scientific(n_cfr_advs)
+               << " Total_advs=" << format_scientific(n_total_advs));
+        // Reset manipulators to default formatting if needed
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
         std::deque<std::shared_ptr<Advantage>> all_advs;

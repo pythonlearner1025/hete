@@ -454,7 +454,7 @@ def PlayHand(token):
                     else:
                         incr = a['street_last_bet_to'] 
                     '''
-                    incr = min(a['street_last_bet_to'], 150)
+                    incr = max(a['street_last_bet_to'], 150)
                     print(f'incr: {incr}')
                     print(f'bet_amt: {bet_amt}')
                     print(f'post_bet_amt: {int(incr+bet_amt)}')
