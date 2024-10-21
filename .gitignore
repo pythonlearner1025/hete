@@ -14,6 +14,7 @@ out/
 *.so
 
 # ignore 
+*.deb
 src/model/model
 src/model/CMakeFiles
 src/models/CMakeCache.txt

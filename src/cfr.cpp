@@ -20,6 +20,7 @@ struct RandInit {
 
 std::vector<TraverseAdvantage> global_advs{};
 std::atomic<size_t> total_advs(0);
+std::atomic<size_t> cfr_iter_advs(0);
 constexpr double NULL_VALUE = -42.0;
 
 struct Advantage {
@@ -98,8 +99,9 @@ void iterative_traverse(
     auto batched_status = init_batched_status(TRAIN_BS);
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
-        int num_advs = total_advs.load();
-        DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal << " advs=" << num_advs);
+        int n_total_advs = total_advs.load();
+        int n_cfr_advs = cfr_iter_advs.load();
+        DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal << " Cfr_iter_advs=" << std::scientific << std::setprecision(2) << n_cfr_advs << "e" << " Total_advs=" << std::scientific << std::setprecision(2) << n_total_advs << "e");
 
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
@@ -108,6 +110,12 @@ void iterative_traverse(
         stack.push({0, initial_engine, nullptr, -1});
 
         while (!stack.empty()) {
+
+            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+                DEBUG_NONE("exceeds_max = True");
+                return;
+            }
+            
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
             stack.pop();
 
@@ -191,6 +199,14 @@ void iterative_traverse(
         // Begin batch inference
         DEBUG_NONE("batch inference time");
         DEBUG_NONE("num_advs = " << all_advs.size());
+        DEBUG_NONE("cfr_iter_advs = " << cfr_iter_advs.load());
+        if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+            DEBUG_NONE("exceeds_max = True");
+            return;
+        } else {
+            //DEBUG_NONE("exceeds_max = False");
+            cfr_iter_advs.fetch_add(all_advs.size());
+        }
 
         size_t num_repeats = (all_advs.size() + TRAIN_BS - 1) / TRAIN_BS;
         DEBUG_NONE("num_repeats = " << num_repeats);
@@ -400,6 +416,8 @@ int main() {
                 }
             }
 
+            cfr_iter_advs.store(0, std::memory_order_seq_cst);
+
             // fresh net to train
             DeepCFRModel train_net;
             DEBUG_NONE("CFR ITER = " << cfr_iter);
@@ -486,8 +504,7 @@ int main() {
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
 
             // eval saved net
-            std::string export_dyld = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && ";
-            std::string command = export_dyld + "source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
             int result = system(command.c_str());

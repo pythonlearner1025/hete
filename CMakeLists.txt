@@ -9,7 +9,11 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
+if(UNIX AND NOT APPLE)
+    set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/home/minjunes/libtorch")
+elseif(APPLE)
+    set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
+endif()
 find_package(Torch REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/OMPEval)
