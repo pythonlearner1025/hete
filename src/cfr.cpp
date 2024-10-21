@@ -101,8 +101,9 @@ void iterative_traverse(
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
         int n_total_advs = total_advs.load();
         int n_cfr_advs = cfr_iter_advs.load();
-        DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal << " Cfr_iter_advs=" << std::scientific << std::setprecision(2) << n_cfr_advs << "e" << " Total_advs=" << std::scientific << std::setprecision(2) << n_total_advs << "e");
-
+        DEBUG_NONE("Thread=" << thread_id << " Iter=" << traversal 
+           << " Cfr_iter_advs=" << std::scientific << std::setprecision(1) << n_cfr_advs / std::pow(10, std::floor(std::log10(n_cfr_advs))) << "e" << std::floor(std::log10(n_cfr_advs))
+           << " Total_advs=" << std::scientific << std::setprecision(1) << n_total_advs / std::pow(10, std::floor(std::log10(n_total_advs))) << "e" << std::floor(std::log10(n_total_advs)));
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
         std::deque<std::shared_ptr<Advantage>> all_advs;
