@@ -202,17 +202,17 @@ def NewHand(token):
             print('Error response: %s' % repr(response.json()))
         except ValueError:
             pass
-        sys.exit(-1)
+        raise Exception("unhandled exception")
 
     try:
         r = response.json()
     except ValueError:
         print('Could not get JSON from response')
-        sys.exit(-1)
+        raise Exception("could not get JSON from response")
 
     if 'error_msg' in r:
         print('Error: %s' % r['error_msg'])
-        sys.exit(-1)
+        raise Exception(r['error_msg'])
         
     return r
 
@@ -230,17 +230,17 @@ def Act(token, action):
             print('Error response: %s' % repr(response.json()))
         except ValueError:
             pass
-        sys.exit(-1)
+        raise Exception('unhandled exception')
 
     try:
         r = response.json()
     except ValueError:
         print('Could not get JSON from response')
-        sys.exit(-1)
+        raise Exception('could not get JSON from resposne')
 
     if 'error_msg' in r:
         print('Error: %s' % r['error_msg'])
-        sys.exit(-1)
+        raise Exception(r['error_msg'])
         
     return r
 
@@ -384,7 +384,7 @@ def PlayHand(token):
         a = ParseAction(action)
         if 'error' in a:
             print('Error parsing action %s: %s' % (action, a['error']))
-            sys.exit(-1)
+            raise Exception(a['error'])
         
         print(a) 
         assert a['last_bettor'] != client_pos
@@ -447,11 +447,14 @@ def PlayHand(token):
                     client_last_bet = a['street_last_bet_to']
                 else:
                     bet_frac = bet_amt / pot
+                    '''
                     if round == 0 and a['street_last_bet_to']:
                         # still don't understand why it's 150 instead of 100
                         incr = 150 
                     else:
                         incr = a['street_last_bet_to'] 
+                    '''
+                    incr = min(a['street_last_bet_to'], 150)
                     print(f'incr: {incr}')
                     print(f'bet_amt: {bet_amt}')
                     print(f'post_bet_amt: {int(incr+bet_amt)}')
