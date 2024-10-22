@@ -532,7 +532,12 @@ int main() {
             /*
 
             // eval saved net
+<<<<<<< HEAD
             std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && . ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+=======
+            /*
+            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+>>>>>>> 83a9097f5bfb1a80e33e13e5dae1b1bb31a7b102
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
             int result = system(command.c_str());

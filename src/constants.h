@@ -20,8 +20,8 @@ constexpr int64_t MODEL_DIM = 256;
 
 // training
 constexpr size_t TRAIN_BS = 1024;
-constexpr size_t TRAIN_EPOCHS = 10;
-constexpr size_t TRAIN_ITERS = 64000;
+constexpr size_t TRAIN_EPOCHS = 20;
+constexpr size_t TRAIN_ITERS = 32000;
 
 // eval
 constexpr size_t EVAL_BS = 100000;
