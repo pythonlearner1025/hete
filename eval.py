@@ -400,6 +400,7 @@ def PlayHand(player_models, token):
             #if a['last_bettor'] != -1:, then you must cbr
             player_idx = 1 if client_pos == 0 else 0
             logits = net_forward(
+                player_models,
                 player_idx,
                 hole_cards,
                 board,
@@ -507,80 +508,67 @@ if __name__ == '__main__':
     parser.add_argument('--username', type=str, default="")
     parser.add_argument('--password', type=str, default="")
     parser.add_argument('--log_path', type=str)
-<<<<<<< HEAD
-    parser.add_argument('--num_hands', type=int, default=100)
-    parser.add_argument('--plot_all',type=int, defualt=0)
-    parser.add_argument('--plot_intervals',type=int, defualt=5)
-=======
-    parser.add_argument('--iter', type=int, default=-1)
     parser.add_argument('--num_hands', type=int, default=1000)
+    parser.add_argument('--plot_all',type=int, default=0)
+    parser.add_argument('--plot_intervals',type=int, default=5)
     parser.add_argument('--write', type=int, default=1)
->>>>>>> 83a9097f5bfb1a80e33e13e5dae1b1bb31a7b102
     args = parser.parse_args()
     username = args.username
     password = args.password
     log_path = args.log_path
     num_hands = args.num_hands
-<<<<<<< HEAD
     plot_all = args.plot_all
-=======
-    iter = args.iter
+    plot_intervals = args.plot_intervals
     write = args.write
->>>>>>> 83a9097f5bfb1a80e33e13e5dae1b1bb31a7b102
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
-    CFR_ITER = iter
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
     total_iters = len(only_dirs) if plot_all else 1
 
-    for i in range()
+    for eval_cfr_iter in range(1, total_iters+1, plot_intervals):
 
-    player_models = dict()
-    
-    eval_cfr_iter = 1 # default cfr iter is 1
-    for i in range(NUM_PLAYERS):
-        assert CFR_ITER == -1 or CFR_ITER < len(os.listdir(MODELS_PATH))
-        only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
-        print(only_dirs)
-        eval_cfr_iter = sorted(only_dirs)[CFR_ITER]
-        path = os.path.join(MODELS_PATH, eval_cfr_iter, str(i), 'model.pt')
-        player_models[i] = path   
+        player_models = dict()
 
-    if username and password:
-        token = Login(username, password)
-    else:
-        token = None
+        for i in range(NUM_PLAYERS):
+            assert eval_cfr_iter == -1 or eval_cfr_iter < len(os.listdir(MODELS_PATH))
+            path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.pt')
+            player_models[i] = path   
 
-    # To avoid SSLError:
-    #   import urllib3
-    #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    errors = []
-    winnings = 0
-    for h in range(num_hands):
-        try:
-            (token, hand_winnings) = PlayHand(player_models, token)
-            winnings += hand_winnings
-        except Exception as e:
-            print(f"skipping hand {h} due to error: {e}")
-            errors.append(str(e))
-    
-    eval_results = {
-        'eval_cfr_iter': eval_cfr_iter,
-        'total_winnings': winnings,
-        'bb_per_100': winnings/150,
-        'session_baseline_total_avg': sum(baseline_totals)/len(baseline_totals) if baseline_totals else 0
-    }
-    
-    if write:
-        with open(f'{log_path}/eval.log', 'a') as f:
-            for key, value in eval_results.items():
-                log_line = f'{key} = {value}\n'
-                f.write(log_line)
-                print(log_line.strip())  # Print without the newline character
-        
-        with open(f'{log_path}/eval_errs.log', 'a') as f:
-            for err in errors:
-                f.write(err + '\n')
+        if username and password:
+            token = Login(username, password)
+        else:
+            token = None
+
+        # To avoid SSLError:
+        #   import urllib3
+        #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        errors = []
+        winnings = 0
+        for h in range(num_hands):
+            try:
+                (token, hand_winnings) = PlayHand(player_models, token)
+                winnings += hand_winnings
+            except Exception as e:
+                print(f"skipping hand {h} due to error: {e}")
+                errors.append(str(e))
+
+        eval_results = {
+            'eval_cfr_iter': eval_cfr_iter,
+            'total_winnings': winnings,
+            'bb_per_100': winnings/150,
+            'session_baseline_total_avg': sum(baseline_totals)/len(baseline_totals) if baseline_totals else 0
+        }
+
+        if write:
+            with open(f'{log_path}/eval.log', 'a') as f:
+                for key, value in eval_results.items():
+                    log_line = f'{key} = {value}\n'
+                    f.write(log_line)
+                    print(log_line.strip())  # Print without the newline character
+            
+            with open(f'{log_path}/eval_errs.log', 'a') as f:
+                for err in errors:
+                    f.write(err + '\n')

@@ -47,7 +47,8 @@ the lower the better
 
 # TODO
 
-- squash all multithreading bugs
+- training checkpoints
+- chart progress against slumbot, or code is wrong
 
 
 
