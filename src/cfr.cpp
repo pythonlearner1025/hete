@@ -524,13 +524,15 @@ int main() {
 
             std::filesystem::path current_path = run_dir;
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
+
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
+            /*
 
             // eval saved net
-            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
+            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && . ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
             int result = system(command.c_str());
@@ -539,6 +541,7 @@ int main() {
             } else {
                 DEBUG_NONE("Error executing evaluation script. Return code: " << result);
             }
+            */
 
             if (std::filesystem::exists(save_path)) {
                 DEBUG_NONE("File successfully created at " << save_path);
