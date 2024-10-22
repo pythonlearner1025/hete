@@ -284,7 +284,7 @@ def read_config(file_path):
 
 
 
-def net_forward(player_idx, hand, board, status, fracs):
+def net_forward(player_models, player_idx, hand, board, status, fracs):
     assert len(status) == len(fracs)
     hand = [card2int(h) for h in hand]
     board += [None] * (5-len(board))
@@ -335,7 +335,7 @@ def idx2act(idx, pot, can_check):
                 bet_amt += inc
         raise Exception("act out of bounds") 
  
-def PlayHand(token):
+def PlayHand(player_models, token):
     r = NewHand(token)
     # We may get a new token back from /api/new_hand
     new_token = r.get('token')
@@ -508,20 +508,27 @@ if __name__ == '__main__':
     parser.add_argument('--password', type=str, default="")
     parser.add_argument('--log_path', type=str)
     parser.add_argument('--num_hands', type=int, default=100)
+    parser.add_argument('--plot_all',type=int, defualt=0)
+    parser.add_argument('--plot_intervals',type=int, defualt=5)
     args = parser.parse_args()
     username = args.username
     password = args.password
     log_path = args.log_path
     num_hands = args.num_hands
+    plot_all = args.plot_all
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
     CFR_ITER = -1
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
-    player_models = dict()
+    only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
+    total_iters = len(only_dirs) if plot_all else 1
 
-    # init player models with model from latest cfr iter
+    for i in range()
+
+    player_models = dict()
+    
     eval_cfr_iter = 1 # default cfr iter is 1
     for i in range(NUM_PLAYERS):
         assert CFR_ITER == -1 or CFR_ITER < len(os.listdir(MODELS_PATH))
@@ -543,7 +550,7 @@ if __name__ == '__main__':
     winnings = 0
     for h in range(num_hands):
         try:
-            (token, hand_winnings) = PlayHand(token)
+            (token, hand_winnings) = PlayHand(player_models, token)
             winnings += hand_winnings
         except Exception as e:
             print(f"skipping hand {h} due to error: {e}")
