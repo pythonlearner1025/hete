@@ -530,6 +530,7 @@ int main() {
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
 
             // eval saved net
+            /*
             std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
@@ -539,6 +540,7 @@ int main() {
             } else {
                 DEBUG_NONE("Error executing evaluation script. Return code: " << result);
             }
+            */
 
             if (std::filesystem::exists(save_path)) {
                 DEBUG_NONE("File successfully created at " << save_path);
