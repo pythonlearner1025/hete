@@ -507,16 +507,20 @@ if __name__ == '__main__':
     parser.add_argument('--username', type=str, default="")
     parser.add_argument('--password', type=str, default="")
     parser.add_argument('--log_path', type=str)
-    parser.add_argument('--num_hands', type=int, default=100)
+    parser.add_argument('--iter', type=int, default=-1)
+    parser.add_argument('--num_hands', type=int, default=1000)
+    parser.add_argument('--write', type=int, default=1)
     args = parser.parse_args()
     username = args.username
     password = args.password
     log_path = args.log_path
     num_hands = args.num_hands
+    iter = args.iter
+    write = args.write
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
-    CFR_ITER = -1
+    CFR_ITER = iter
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
     player_models = dict()
@@ -556,12 +560,13 @@ if __name__ == '__main__':
         'session_baseline_total_avg': sum(baseline_totals)/len(baseline_totals) if baseline_totals else 0
     }
     
-    with open(f'{log_path}/eval.log', 'a') as f:
-        for key, value in eval_results.items():
-            log_line = f'{key} = {value}\n'
-            f.write(log_line)
-            print(log_line.strip())  # Print without the newline character
-    
-    with open(f'{log_path}/eval_errs.log', 'a') as f:
-        for err in errors:
-            f.write(err + '\n')
+    if write:
+        with open(f'{log_path}/eval.log', 'a') as f:
+            for key, value in eval_results.items():
+                log_line = f'{key} = {value}\n'
+                f.write(log_line)
+                print(log_line.strip())  # Print without the newline character
+        
+        with open(f'{log_path}/eval_errs.log', 'a') as f:
+            for err in errors:
+                f.write(err + '\n')
