@@ -45,6 +45,35 @@ void update_tensors(
     }
 }
 
+int sample_iter(size_t iter) {
+    // compute softmax
+    double sum;
+    for (int i = 1; i <= iter; ++i) {
+        sum += exp(i);
+    }
+
+    std::vector<double> softmax_iters{};
+    softmax_iters.resize(iter);
+
+    for (int i = 1; i <= iter; ++i) {
+        softmax_iters[i] = exp(i)/sum;
+    }
+
+    // sample
+    double r = static_cast<double>(rand()) / RAND_MAX;
+    double cumulative = 0.0;
+    for (int i = 1; i <= iter; ++i) {
+        DEBUG_INFO("softmax_iters " << i << " has p=" << strat[i]);
+        cumulative += softmax_iters[i];
+        if (r <= cumulative) {
+            DEBUG_INFO("returning " << i);
+            return i;
+        }
+    }
+
+    return softmax_iters[softmax_iters.size()-1];
+}
+
 // Sample an action according to the strategy probabilities
 int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
     double r = static_cast<double>(rand()) / RAND_MAX;
