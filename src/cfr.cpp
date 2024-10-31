@@ -19,7 +19,7 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
-std::vector<TraverseAdvantage> global_advs{};
+std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
 std::atomic<size_t> total_advs(0);
 std::atomic<size_t> cfr_iter_advs(0);
 constexpr double NULL_VALUE = -42.0;
@@ -234,12 +234,12 @@ void iterative_traverse(
             cfr_iter_advs.fetch_add(all_advs.size());
         }
 
-        size_t num_repeats = (all_advs.size() + TRAIN_BS - 1) / TRAIN_BS;
+        size_t num_repeats = (all_advs.size() + TRAVERSAL_BS - 1) / TRAVERSAL_BS;
         DEBUG_NONE("num_repeats = " << num_repeats);
         size_t advs_idx = 0;
 
         for (size_t r = 0; r < num_repeats; ++r) {
-            size_t batch_size = std::min(TRAIN_BS, all_advs.size()-advs_idx);
+            size_t batch_size = std::min(TRAVERSAL_BS, all_advs.size()-advs_idx);
 
             for (size_t i = 0; i < batch_size; ++i) {
                 //DEBUG_NONE("udt");
@@ -308,11 +308,11 @@ void iterative_traverse(
 
             size_t current_total = total_advs.fetch_add(1);
             if (current_total < MAX_SIZE) {
-                global_advs[current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+                global_player_advs[player][current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
             } else {
                 size_t r = std::rand() % (current_total + 1);
                 if (r < MAX_SIZE) {
-                    global_advs[r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+                    global_player_advs[player][r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
                 }
             }
 
@@ -371,8 +371,6 @@ int main() {
         }
     }
     
-    global_advs.resize(MAX_SIZE);
-
     int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;
     int remaining_traversals = NUM_TRAVERSALS % NUM_THREADS;
     DEBUG_WRITE(logfile, "Traversals per thread: " << traversals_per_thread);
@@ -382,6 +380,7 @@ int main() {
     for (size_t i=0; i<NUM_PLAYERS; ++i) {
         starting_stacks[i] = 100.0;
         antes[i] = 0.0;
+        global_player_advs[i].resize(MAX_SIZE);
     } 
     double small_bet = 0.5;
     double big_bet = 1.0;
@@ -453,12 +452,14 @@ int main() {
             std::random_device rd;
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
-            size_t safe_size = std::min(total_advs.load(), global_advs.size());
-            std::shuffle(global_advs.begin(), global_advs.begin() + safe_size, rng);
+            size_t safe_size = std::min(total_advs.load(), global_player_advs[player].size());
+            std::shuffle(global_player_advs[player].begin(), global_player_advs[player].begin() + safe_size, rng);
             std::vector<TraverseAdvantage> training_advs;
+            // TODO - update weights once for each batch per train_iter 
+            // overhaul current training
             size_t train_iters = std::min(TRAIN_ITERS, safe_size);
             for (size_t i = 0; i < train_iters; ++i) {
-                training_advs.push_back(global_advs[i]);
+                training_advs.push_back(global_player_advs[player][i]);
             }
 
             DEBUG_NONE("TOTAL TRAINING SAMPLES = " << training_advs.size());
@@ -532,12 +533,7 @@ int main() {
             /*
 
             // eval saved net
-<<<<<<< HEAD
             std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && . ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
-=======
-            /*
-            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && source ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
->>>>>>> 83a9097f5bfb1a80e33e13e5dae1b1bb31a7b102
             DEBUG_NONE("Executing command: " << command);
             DEBUG_WRITE(logfile, "Executing command: " << command);
             int result = system(command.c_str());
@@ -556,9 +552,12 @@ int main() {
             }
 
             // todo replace nets with trained nets
+            // create array of length cfr_iter, fill it with values
             for (size_t i=0; i<NUM_THREADS; ++i) {
                 DeepCFRModel model;
-                torch::load(model, save_path);
+                int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter));
+                std::string iter_model_path = (current_path / std::to_string(sampled_iter) / std::to_string(player) / "model.pt").string();
+                torch::load(model, iter_model_path);
                 nets[i][player] = model;
             }
             DEBUG_NONE("loaded trained nets into nets");
