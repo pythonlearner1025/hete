@@ -452,25 +452,13 @@ int main() {
             std::random_device rd;
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
-            size_t safe_size = std::min(total_advs.load(), global_player_advs[player].size());
-            std::shuffle(global_player_advs[player].begin(), global_player_advs[player].begin() + safe_size, rng);
-            std::vector<TraverseAdvantage> training_advs;
-            // TODO - update weights once for each batch per train_iter 
-            // overhaul current training
-            size_t train_iters = std::min(TRAIN_ITERS, safe_size);
-            for (size_t i = 0; i < train_iters; ++i) {
-                training_advs.push_back(global_player_advs[player][i]);
-            }
-
-            DEBUG_NONE("TOTAL TRAINING SAMPLES = " << training_advs.size());
-            DEBUG_WRITE(logfile, "TOTAL TRAINING SAMPLES = " << training_advs.size());
-            int batch_repeat = train_iters / TRAIN_BS;
-            int advs_idx = 0;
-
-            for (int _ = 0; _ < batch_repeat; ++_) {
-                size_t batch_size = std::min(TRAIN_BS, training_advs.size()-advs_idx);
-                for (size_t i = 0; i < batch_size; ++i) {
-                    State S = training_advs[advs_idx].state;
+            size_t train_bs = std::min(TRAIN_BS, global_player_advs[player].size());
+            DEBUG_NONE("TRAIN_BS = " << train_bs);
+            for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
+                size_t safe_size = std::min(total_advs.load(), global_player_advs[player].size());
+                std::shuffle(global_player_advs[player].begin(), global_player_advs[player].begin() + safe_size, rng);
+                for (size_t i = 0; i < train_bs; ++i) {
+                    State S = global_player_advs[player][i].state;
                     update_tensors(
                         S, 
                         batched_hands, 
@@ -483,44 +471,40 @@ int main() {
                     ); 
 
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs_a[i][a] = training_advs[advs_idx].advantages[a];
+                        batched_advs_a[i][a] = global_player_advs[player][i].advantages[a];
                     }
-                    int iteration = training_advs[advs_idx].iteration;
+                    int iteration = global_player_advs[player][i].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
-                    advs_idx++;
                 }
 
                 torch::optim::Adam optimizer(train_net->parameters());
+                train_net->zero_grad();
+    
+                auto pred = train_net->forward(
+                    batched_hands.slice(0, 0, train_bs),
+                    batched_flops.slice(0, 0, train_bs),
+                    batched_turns.slice(0, 0, train_bs),
+                    batched_rivers.slice(0, 0, train_bs), 
+                    batched_fracs.slice(0, 0, train_bs), 
+                    batched_status.slice(0, 0, train_bs)
+                );
 
-                for (size_t epoch = 0; epoch < TRAIN_EPOCHS; ++epoch) {
-                    train_net->zero_grad();
-        
-                    auto pred = train_net->forward(
-                        batched_hands.slice(0, 0, batch_size),
-                        batched_flops.slice(0, 0, batch_size),
-                        batched_turns.slice(0, 0, batch_size),
-                        batched_rivers.slice(0, 0, batch_size), 
-                        batched_fracs.slice(0, 0, batch_size), 
-                        batched_status.slice(0, 0, batch_size)
-                    );
+                auto loss = torch::nn::functional::mse_loss(
+                    pred, 
+                    batched_advs.slice(0, 0, train_bs),
+                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
+                );
 
-                    auto loss = torch::nn::functional::mse_loss(
-                        pred, 
-                        batched_advs.slice(0, 0, batch_size),
-                        torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
-                    );
+                loss *= batched_iters.slice(0, 0, train_bs);
 
-                    loss *= batched_iters.slice(0, 0, batch_size);
+                auto batch_mean_loss = loss.mean(1).mean();
+                
+                batch_mean_loss.backward();
+                optimizer.step();
 
-                    auto batch_mean_loss = loss.mean(1).mean();
-                    
-                    batch_mean_loss.backward();
-                    optimizer.step();
-
-                    // Log the mean loss every epoch
-                    DEBUG_NONE("Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << batch_mean_loss.item<float>());
-                    DEBUG_WRITE(logfile, "Epoch " << epoch + 1 << "/" << TRAIN_EPOCHS << ", Loss: " << batch_mean_loss.item<float>());
-                }
+                // Log the mean loss every epoch
+                DEBUG_NONE("TRAIN_ITER " << train_iter << "/" << TRAIN_ITERS << ", Loss: " << batch_mean_loss.item<float>());
+                DEBUG_WRITE(logfile, "TRAIN_ITER " << train_iter  << "/" << TRAIN_ITERS << ", Loss: " << batch_mean_loss.item<float>());
             }
 
             std::filesystem::path current_path = run_dir;
@@ -530,8 +514,8 @@ int main() {
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
-            /*
 
+            /*
             // eval saved net
             std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && . ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
             DEBUG_NONE("Executing command: " << command);
