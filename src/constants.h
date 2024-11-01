@@ -9,7 +9,7 @@ constexpr size_t CFR_MAX_SIZE = 5e6;
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 6;
 constexpr size_t CFR_ITERS = 300;
-constexpr size_t NUM_THREADS = 12;
+constexpr size_t NUM_THREADS = 1;
 
 // engine
 constexpr int MAX_ROUND_BETS = 3;
