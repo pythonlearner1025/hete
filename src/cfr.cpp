@@ -442,10 +442,12 @@ int main() {
                 // Then load the new model and set the references
                 DEBUG_NONE("sample iter");
                 int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
-                std::string iter_model_path = (current_path / std::to_string(sampled_iter) / 
-                                            std::to_string(player) / "model.pt").string();
-                DEBUG_NONE("god model path");
-                model_paths[player] = iter_model_path; 
+                std::filesystem::path iter_model_path = current_path;
+                iter_model_path /= std::to_string(sampled_iter);
+                iter_model_path /= std::to_string(player);
+                iter_model_path /= "model.pt";
+                std::string path_str = iter_model_path.string(); 
+                model_paths[player] = path_str; 
             } else {
                 model_paths[player] = "null";
             }
@@ -501,7 +503,6 @@ int main() {
                         pool.begin() + window_start, 
                         pool.begin() + window_start + train_bs);
                 std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
-                
                 window_start = (window_start + train_bs) % POOL_SIZE;
 
                 for (size_t i = 0; i < train_bs; ++i) {
