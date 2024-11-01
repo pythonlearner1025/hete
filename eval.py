@@ -411,7 +411,11 @@ def PlayHand(player_models, token):
             min_bet_amt = a['street_last_bet_to'] - client_last_bet
             print(f'min_bet_amt: {min_bet_amt}')
             mask_illegals(logits, pot, min_bet_amt)
-            actidx = np.argmax(regret_match(logits)).item()
+            # fold is illegal
+            regrets = regret_match(logits)
+            if r['action'] == '':
+                regrets[0] = -1
+            actidx = np.argmax(regrets).item()
             client_act = idx2act(actidx, pot, can_check)
             # check validity...
             if client_act == 'f':
@@ -448,13 +452,6 @@ def PlayHand(player_models, token):
                     client_last_bet = a['street_last_bet_to']
                 else:
                     bet_frac = bet_amt / pot
-                    '''
-                    if round == 0 and a['street_last_bet_to']:
-                        # still don't understand why it's 150 instead of 100
-                        incr = 150 
-                    else:
-                        incr = a['street_last_bet_to'] 
-                    '''
                     incr = max(a['street_last_bet_to'], 150)
                     print(f'incr: {incr}')
                     print(f'bet_amt: {bet_amt}')
@@ -509,7 +506,7 @@ if __name__ == '__main__':
     parser.add_argument('--password', type=str, default="")
     parser.add_argument('--log_path', type=str)
     parser.add_argument('--num_hands', type=int, default=1000)
-    parser.add_argument('--plot_all',type=int, default=0)
+    parser.add_argument('--plot_all',type=int, default=1)
     parser.add_argument('--plot_intervals',type=int, default=5)
     parser.add_argument('--write', type=int, default=1)
     args = parser.parse_args()

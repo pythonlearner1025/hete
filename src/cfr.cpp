@@ -431,8 +431,8 @@ int main() {
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         // init models
         std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
+        // load and assign models
         for (int player=0; player<NUM_PLAYERS; ++player) {
-            // load and assign models
             if (cfr_iter > 1) {
                 // Then load the new model and set the references
                 int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
@@ -442,7 +442,6 @@ int main() {
                     DeepCFRModel new_net;
                     torch::load(new_net, iter_model_path);
                     new_net->to(cpu_device);
-                    // Set all thread references to the new model
                     for (size_t j = 0; j < NUM_THREADS; j++) {
                         nets[j][player] = new_net;
                     }
@@ -456,7 +455,9 @@ int main() {
                     nets[i][player] = init_model;
                 }
             }
+        }
 
+        for (int player=0; player<NUM_PLAYERS; ++player) {
             // init threads
             std::vector<std::thread> threads;
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {

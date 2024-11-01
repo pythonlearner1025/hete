@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import os
 
 def plot_train():
-    file = 'out/20241020143633/train.log'
+    file = 'out/20241101154329/train.log'
 
     with open(file, 'r') as f:
         lines = f.readlines()
@@ -78,7 +78,7 @@ def plot_eval():
         return eval_cfr_iters, bb_per_100s
 
     # Path to the log file
-    log_file_path = 'out/20241021145641/eval.log'
+    log_file_path = 'out/20241101154329/eval.log'
 
     # Get the data
     eval_cfr_iters, bb_per_100s = read_log_file(log_file_path)
