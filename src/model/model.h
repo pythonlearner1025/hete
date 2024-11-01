@@ -8,6 +8,7 @@
 #include <memory>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include "../constants.h"
 #include "../debug.h"
 
@@ -188,12 +189,61 @@ struct DeepCFRModelImpl : torch::nn::Module {
         z = torch::relu(comb1->forward(z));                       // [N,MODEL_DIM]
         z = torch::relu(comb2->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
         z = torch::relu(comb3->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        //z = norm->forward(z);                                      // LayerNorm
+        z = norm->forward(z);                                      // LayerNorm
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
         //std::cout << "forward complete" << std::endl;
         return output;
+    }
+
+        // Model class is inherited from public nn::Module
+    std::vector<char> get_the_bytes(std::string filename) {
+        std::ifstream input(filename, std::ios::binary);
+        std::vector<char> bytes(
+            (std::istreambuf_iterator<char>(input)),
+            (std::istreambuf_iterator<char>()));
+
+        input.close();
+        return bytes;
+    }
+        
+    void load_parameters(std::string pt_path) {
+        try {
+            // Read file bytes
+            std::vector<char> f = this->get_the_bytes(pt_path);
+            
+            // Load weights from pickle
+            c10::Dict<torch::jit::IValue, torch::jit::IValue> weights = 
+                torch::pickle_load(f).toGenericDict();
+            
+            // Get current model parameters
+            auto model_params = this->named_parameters();
+            std::vector<std::string> param_names;
+            for (const auto& w : model_params) {
+                param_names.push_back(w.key());
+            }
+
+            // Update parameters
+            torch::NoGradGuard no_grad;
+            for (const auto& w : weights) {
+                std::string name = w.key().toStringRef();
+                at::Tensor param = w.value().toTensor();
+
+                auto param_it = model_params.find(name);
+                if (std::find(param_names.begin(), param_names.end(), name) != param_names.end()) {
+                    model_params.find(name)->copy_(param);
+                } else {
+                    std::cout << "Warning: Parameter '" << name 
+                            << "' does not exist in model" << std::endl;
+                }
+            }
+            
+            std::cout << "Successfully loaded parameters from " << pt_path << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Error loading parameters: " << e.what() << std::endl;
+            throw;
+        }
     }
 };
 TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>

@@ -59,6 +59,7 @@ def plot_train():
     plt.savefig(os.path.join(output_dir, 'loss_plot.png'))
 
 def plot_eval():
+    # visualize softmax
     # Define the function to read the log file and extract data
     def read_log_file(file_path):
         eval_cfr_iters = []
