@@ -2,6 +2,11 @@
 #include "debug.h"
 #include <torch/torch.h>
 #include <torch/script.h>
+//#include <ATen/autocast_mode.h>
+//#include <ATen/cuda/CUDAGraph.h>
+//#include <ATen/cuda/CUDAContext.h>
+//#include <c10/cuda/CUDAGuard.h>
+#include <torch/cuda.h>
 #include <tuple>
 #include <thread>
 #include <atomic>
@@ -22,6 +27,8 @@ struct RandInit {
 std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
 std::atomic<size_t> total_advs(0);
 std::atomic<size_t> cfr_iter_advs(0);
+torch::Device cpu_device(torch::kCPU);
+torch::Device gpu_device(torch::kCUDA, 0); // Use first GPU
 constexpr double NULL_VALUE = -42.0;
 
 struct Advantage {
@@ -114,12 +121,16 @@ void iterative_traverse(
     auto bet_fracs = init_batched_fracs(1);
     auto bet_status = init_batched_status(1);
 
-    auto batched_hands = init_batched_hands(TRAIN_BS);
-    auto batched_flops = init_batched_flops(TRAIN_BS);
-    auto batched_turns = init_batched_turns(TRAIN_BS);
-    auto batched_rivers = init_batched_rivers(TRAIN_BS);
-    auto batched_fracs = init_batched_fracs(TRAIN_BS);
-    auto batched_status = init_batched_status(TRAIN_BS);
+    auto batched_hands = init_batched_hands(TRAVERSAL_BS);
+    auto batched_flops = init_batched_flops(TRAVERSAL_BS);
+    auto batched_turns = init_batched_turns(TRAVERSAL_BS);
+    auto batched_rivers = init_batched_rivers(TRAVERSAL_BS);
+    auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
+    auto batched_status = init_batched_status(TRAVERSAL_BS);
+
+    DeepCFRModel cpu_net = nets[player];
+    cpu_net->to(cpu_device);
+    cpu_net->eval();
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
         int n_total_advs = total_advs.load();
@@ -198,11 +209,10 @@ void iterative_traverse(
                 get_state(engine, state.get(), player);
                 update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
-                DeepCFRModel net_ptr = nets[actor];
-                if (net_ptr.get() == nullptr) {
+                if (cpu_net.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = net_ptr->forward(
+                torch::Tensor logits = cpu_net->forward(
                     hands, 
                     flops, 
                     turns, 
@@ -221,6 +231,10 @@ void iterative_traverse(
                 stack.push(std::make_tuple(depth + 1, std::move(engine), parent_advantage, parent_action));
             }
         }
+
+        DeepCFRModel gpu_net = nets[player];
+        gpu_net->to(gpu_device);
+        gpu_net->eval();
 
         // Begin batch inference
         DEBUG_NONE("batch inference time");
@@ -257,14 +271,14 @@ void iterative_traverse(
                 advs_idx++;
             }
 
-            auto logits = nets[player]->forward(
-                batched_hands.slice(0,0,batch_size),
-                batched_flops.slice(0,0,batch_size),
-                batched_turns.slice(0,0,batch_size),
-                batched_rivers.slice(0,0,batch_size),
-                batched_fracs.slice(0,0,batch_size),
-                batched_status.slice(0,0,batch_size)
-            );
+            auto logits = gpu_net->forward(
+                batched_hands.slice(0,0,batch_size).to(gpu_device),
+                batched_flops.slice(0,0,batch_size).to(gpu_device),
+                batched_turns.slice(0,0,batch_size).to(gpu_device),
+                batched_rivers.slice(0,0,batch_size).to(gpu_device),
+                batched_fracs.slice(0,0,batch_size).to(gpu_device),
+                batched_status.slice(0,0,batch_size).to(gpu_device))
+            .to(cpu_device);
 
             auto regrets = regret_match_batched(logits);
             auto regrets_a = regrets.accessor<float, 2>();
@@ -441,24 +455,46 @@ int main() {
                 }
             }
 
-            cfr_iter_advs.store(0, std::memory_order_seq_cst);
 
             // fresh net to train
             DeepCFRModel train_net;
+            train_net->to(gpu_device);
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
-            DEBUG_NONE("COLLECTED ADVS = " << total_advs.load());
+            DEBUG_NONE("COLLECTED ADVS = " << cfr_iter_advs.load());
             DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs.load());
+            DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
-            size_t train_bs = std::min(TRAIN_BS, global_player_advs[player].size());
+            size_t train_bs = std::min(TRAIN_BS, cfr_iter_advs.load());
             DEBUG_NONE("TRAIN_BS = " << train_bs);
+            if (train_bs == 0) continue;
+            cfr_iter_advs.store(0, std::memory_order_seq_cst);
+                        // Add at the top of file
+            const size_t POOL_SIZE = train_bs * 4; // Size of rotating pool
+            std::vector<size_t> pool(POOL_SIZE);
+            std::iota(pool.begin(), pool.end(), 0);
+            std::shuffle(pool.begin(), pool.end(), rng);
+            size_t window_start = 0;
+
+            // Inside the training loop
             for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
-                size_t safe_size = std::min(total_advs.load(), global_player_advs[player].size());
-                std::shuffle(global_player_advs[player].begin(), global_player_advs[player].begin() + safe_size, rng);
+                // Rotate and shuffle window
+                std::rotate(pool.begin(), 
+                        pool.begin() + window_start, 
+                        pool.begin() + window_start + train_bs);
+                std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
+                
+                window_start = (window_start + train_bs) % POOL_SIZE;
+
+                DEBUG_NONE("Advantage value sample before update: " << global_player_advs[player][pool[0]].advantages[0]);
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    DEBUG_NONE("Raw advantage [" << a << "]: " << global_player_advs[player][pool[0]].advantages[a]);
+                }
+
                 for (size_t i = 0; i < train_bs; ++i) {
-                    State S = global_player_advs[player][i].state;
+                    State S = global_player_advs[player][pool[i]].state;
                     update_tensors(
                         S, 
                         batched_hands, 
@@ -471,40 +507,41 @@ int main() {
                     ); 
 
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs_a[i][a] = global_player_advs[player][i].advantages[a];
+                        batched_advs_a[i][a] = global_player_advs[player][pool[i]].advantages[a];
                     }
-                    int iteration = global_player_advs[player][i].iteration;
+                    int iteration = global_player_advs[player][pool[i]].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
+                torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
 
-                torch::optim::Adam optimizer(train_net->parameters());
-                train_net->zero_grad();
-    
                 auto pred = train_net->forward(
-                    batched_hands.slice(0, 0, train_bs),
-                    batched_flops.slice(0, 0, train_bs),
-                    batched_turns.slice(0, 0, train_bs),
-                    batched_rivers.slice(0, 0, train_bs), 
-                    batched_fracs.slice(0, 0, train_bs), 
-                    batched_status.slice(0, 0, train_bs)
+                    batched_hands.slice(0, 0, train_bs).to(gpu_device),
+                    batched_flops.slice(0, 0, train_bs).to(gpu_device),
+                    batched_turns.slice(0, 0, train_bs).to(gpu_device),
+                    batched_rivers.slice(0, 0, train_bs).to(gpu_device), 
+                    batched_fracs.slice(0, 0, train_bs).to(gpu_device), 
+                    batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
+
+                DEBUG_NONE("Pred tensor contains zeros only: " << std::to_string(pred.abs().sum().item<float>() == 0));
+                DEBUG_NONE("Advantages tensor contains zeros only: " << std::to_string(batched_advs.abs().sum().item<float>() == 0));
+                DEBUG_NONE("Pred shape: " << pred.sizes());
+                DEBUG_NONE("Target shape: " << batched_advs.slice(0, 0, train_bs).sizes());
+                DEBUG_NONE("Pred sample: " << pred.slice(0, 0, 5));
+                DEBUG_NONE("Target sample: " << batched_advs.slice(0, 0, 5));
 
                 auto loss = torch::nn::functional::mse_loss(
                     pred, 
-                    batched_advs.slice(0, 0, train_bs),
+                    batched_advs.slice(0, 0, train_bs).to(gpu_device),
                     torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
                 );
 
-                loss *= batched_iters.slice(0, 0, train_bs);
-
+                loss *= batched_iters.slice(0, 0, train_bs).to(gpu_device);
                 auto batch_mean_loss = loss.mean(1).mean();
-                
                 batch_mean_loss.backward();
+                //torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
                 optimizer.step();
-
-                // Log the mean loss every epoch
-                DEBUG_NONE("TRAIN_ITER " << train_iter << "/" << TRAIN_ITERS << ", Loss: " << batch_mean_loss.item<float>());
-                DEBUG_WRITE(logfile, "TRAIN_ITER " << train_iter  << "/" << TRAIN_ITERS << ", Loss: " << batch_mean_loss.item<float>());
+                DEBUG_NONE("ITER: " << train_iter << "/" << TRAIN_ITERS << " LOSS: " << batch_mean_loss.to(cpu_device).item());            
             }
 
             std::filesystem::path current_path = run_dir;
@@ -542,9 +579,181 @@ int main() {
                 int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter));
                 std::string iter_model_path = (current_path / std::to_string(sampled_iter) / std::to_string(player) / "model.pt").string();
                 torch::load(model, iter_model_path);
+                model->to(cpu_device); // default to cpu
                 nets[i][player] = model;
             }
             DEBUG_NONE("loaded trained nets into nets");
         }
     }
 }
+
+// opts
+// mix precision: https://discuss.pytorch.org/t/deploy-mixed-precision-model-in-libtorch/89046/5
+/*
+int none() {
+    TORCH_CHECK(torch::cuda::is_available(), "CUDA must be available");
+
+    // Initialize test data with fixed values
+    std::atomic<size_t> test_total_advs(CFR_MAX_SIZE); // Fixed size for testing
+    std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> test_global_player_advs{};
+    for (size_t i = 0; i < NUM_PLAYERS; i++) {
+        test_global_player_advs[i].resize(CFR_MAX_SIZE); // Fixed size for testing
+        // Fill with dummy data
+        for (size_t j = 0; j < CFR_MAX_SIZE; j++) {
+            test_global_player_advs[i][j] = TraverseAdvantage{
+                State{}, // Default state
+                1,      // Default iteration
+                std::array<double, NUM_ACTIONS>{1.0} // Default advantages
+            };
+        }
+    }
+
+    // Profile training code
+    int player = 0; // Test with player 0
+    int cfr_iter = 1; // Test with first iteration
+    
+    // fresh net to train
+    DeepCFRModel train_net;
+    train_net->to(gpu_device);
+    static at::cuda::CUDAGraph cuda_graph;
+    auto capture_stream = at::cuda::getStreamFromPool();
+
+ 
+    auto batched_hands = init_batched_hands(TRAIN_BS);
+    auto batched_flops = init_batched_flops(TRAIN_BS);
+    auto batched_turns = init_batched_turns(TRAIN_BS);
+    auto batched_rivers = init_batched_rivers(TRAIN_BS);
+    auto batched_fracs = init_batched_fracs(TRAIN_BS);
+    auto batched_status = init_batched_status(TRAIN_BS);
+    auto batched_advs = init_batched_advs(TRAIN_BS);
+    auto batched_iters = init_batched_iters(TRAIN_BS);
+
+    auto batched_advs_a = batched_advs.accessor<at::Half, 2>();
+    auto batched_iters_a = batched_iters.accessor<int, 2>();
+    torch::Tensor static_loss;  // Keep static copy for graph capture
+
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    size_t train_bs = std::min(TRAIN_BS, test_global_player_advs[player].size());
+
+       // Initialize pool sampler
+    const size_t POOL_SIZE = train_bs * 4; // Size of rotating pool
+    std::vector<size_t> pool(POOL_SIZE);
+    std::iota(pool.begin(), pool.end(), 0);
+    std::shuffle(pool.begin(), pool.end(), rng);
+    size_t window_start = 0;
+
+    std::cout << "Starting training profile test..." << std::endl;
+    std::cout << "Training batch size: " << train_bs << std::endl;
+
+    for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
+        at::cuda::CUDAStreamGuard stream_guard(capture_stream);
+        auto total_start = std::chrono::high_resolution_clock::now();
+        
+        auto shuffle_start = std::chrono::high_resolution_clock::now();
+        size_t safe_size = std::min(test_total_advs.load(), test_global_player_advs[player].size());
+        
+        // Rotate and shuffle window
+        std::rotate(pool.begin(), 
+                   pool.begin() + window_start, 
+                   pool.begin() + window_start + train_bs);
+        std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
+        
+        window_start = (window_start + train_bs) % POOL_SIZE;
+        auto shuffle_end = std::chrono::high_resolution_clock::now();
+
+        auto tensor_update_start = std::chrono::high_resolution_clock::now();
+        //#pragma for omp parallel
+        for (size_t i = 0; i < train_bs; ++i) {
+            State S = test_global_player_advs[player][pool[i]].state;
+            update_tensors(
+                S, 
+                batched_hands, 
+                batched_flops, 
+                batched_turns,
+                batched_rivers,
+                batched_fracs,
+                batched_status,
+                i
+            ); 
+
+            for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                batched_advs_a[i][a] = test_global_player_advs[player][pool[i]].advantages[a];
+            }
+            int iteration = test_global_player_advs[player][pool[i]].iteration;
+            batched_iters_a[i][0] = static_cast<int>(iteration);
+        }
+        auto tensor_update_end = std::chrono::high_resolution_clock::now();
+
+        torch::optim::Adam optimizer(train_net->parameters());
+        
+        auto forward_start = std::chrono::high_resolution_clock::now();
+        at::autocast::set_autocast_enabled(at::kCUDA, true);
+        auto pred = train_net->forward(
+            batched_hands.slice(0, 0, train_bs).to(gpu_device),
+            batched_flops.slice(0, 0, train_bs).to(gpu_device),
+            batched_turns.slice(0, 0, train_bs).to(gpu_device),
+            batched_rivers.slice(0, 0, train_bs).to(gpu_device), 
+            batched_fracs.slice(0, 0, train_bs).to(gpu_device), 
+            batched_status.slice(0, 0, train_bs).to(gpu_device)
+        );
+        auto forward_end = std::chrono::high_resolution_clock::now();
+        at::autocast::clear_cache();
+        at::autocast::set_autocast_enabled(at::kCUDA, false);
+        auto backward_start = std::chrono::high_resolution_clock::now();
+        auto loss = torch::nn::functional::mse_loss(
+            pred, 
+            batched_advs.slice(0, 0, train_bs).to(gpu_device),
+            torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
+        );
+
+        loss *= batched_iters.slice(0, 0, train_bs).to(gpu_device);
+        auto batch_mean_loss = loss.mean(1).mean();
+
+        capture_stream.synchronize();
+        if (train_iter == 0) {
+            static_loss = batch_mean_loss;  // Save for graph replay
+            cuda_graph.capture_begin(
+                {0, 0},  // default pool ID
+                cudaStreamCaptureModeGlobal
+            );
+            static_loss.backward();
+            cuda_graph.capture_end();
+            batch_mean_loss.backward(); 
+        } else {
+            batch_mean_loss.copy_(static_loss);  // Copy new loss to static tensor
+            cuda_graph.replay();  // Replay captured backward graph
+        }
+        //batch_mean_loss.backward();
+        auto backward_end = std::chrono::high_resolution_clock::now();
+
+        auto optim_start = std::chrono::high_resolution_clock::now();
+        torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
+        optimizer.step();
+        auto optim_end = std::chrono::high_resolution_clock::now();
+
+        auto total_end = std::chrono::high_resolution_clock::now();
+
+        // Print timings every iteration for profiling
+        using ms = std::chrono::milliseconds;
+        std::cout << "\nTiming for iteration " << train_iter << ":\n";
+        std::cout << "Shuffle time: " 
+                << std::chrono::duration_cast<ms>(shuffle_end - shuffle_start).count() << "ms\n";
+        std::cout << "Tensor update time: " 
+                << std::chrono::duration_cast<ms>(tensor_update_end - tensor_update_start).count() << "ms\n";
+        std::cout << "Forward pass time: " 
+                << std::chrono::duration_cast<ms>(forward_end - forward_start).count() << "ms\n";
+        std::cout << "Backward pass time: " 
+                << std::chrono::duration_cast<ms>(backward_end - backward_start).count() << "ms\n";
+        std::cout << "Optimizer step time: " 
+                << std::chrono::duration_cast<ms>(optim_end - optim_start).count() << "ms\n";
+        std::cout << "Total iteration time: " 
+                << std::chrono::duration_cast<ms>(total_end - total_start).count() << "ms\n";
+        std::cout << "Loss: " << batch_mean_loss.item<float>() << "\n";
+    }
+    
+    std::cout << "Training profile test completed." << std::endl;
+    return 0;
+}
+*/

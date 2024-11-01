@@ -155,7 +155,6 @@ struct DeepCFRModelImpl : torch::nn::Module {
         auto flop_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
         auto turn_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(2));
         auto river_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(3));
-
         torch::Tensor hand_emb = hand_embed->forward(hand);
         torch::Tensor flop_emb = flop_embed->forward(flop);
         torch::Tensor turn_emb = turn_embed->forward(turn);
@@ -168,13 +167,11 @@ struct DeepCFRModelImpl : torch::nn::Module {
         auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
         x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
         x = torch::relu(card3->forward(x));                  // [N,MODEL_DIM]
-        //DEBUG_NONE("card forwqrds");
 
         // 2. Bet Branch
         auto bet_size = bet_fracs.clamp(/*min=*/0, /*max=*/1e6); // Clamp between 0 and 1e6
         auto bet_occurred = bet_status.to(torch::kFloat);        // [N, bet_input_size / 2]
         auto bet_feats = torch::cat({bet_size, bet_occurred}, /*dim=*/1); // [N, bet_input_size]
-        //DEBUG_NONE("bet embed complete");
         
         // Pass through bet linear layers with ReLU and residual connection
         // Inside the forward function, just before the Bet Branch
@@ -185,7 +182,6 @@ struct DeepCFRModelImpl : torch::nn::Module {
         */
         auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
         y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
-        //DEBUG_NONE("bet12 complete");
 
         // 3. Combined Trunk
         auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 *MODEL_DIM]
@@ -196,7 +192,6 @@ struct DeepCFRModelImpl : torch::nn::Module {
         
         // Action Head
         auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
-        //DEBUG_INFO("act head complete");
         //std::cout << "forward complete" << std::endl;
         return output;
     }
