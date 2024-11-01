@@ -26,7 +26,7 @@
 // CardEmbedding Module
 // ========================
 
-struct CardEmbeddingImpl : torch::nn::Module {
+struct CardEmbeddingImpl :  torch::nn::Module {
     torch::nn::Embedding rank{nullptr}, suit{nullptr}, card{nullptr};
 
     // Constructor
@@ -88,7 +88,7 @@ TORCH_MODULE(CardEmbedding); // Creates CardEmbedding as a ModuleHolder<CardEmbe
 // DeepCFRModel Module
 // ========================
 
-struct DeepCFRModelImpl : torch::nn::Module {
+struct DeepCFRModelImpl :  torch::nn::Module {
     torch::nn::ModuleList card_embeddings{nullptr};
     torch::nn::Linear card1{nullptr}, card2{nullptr}, card3{nullptr};
     torch::nn::Linear bet1{nullptr}, bet2{nullptr};
@@ -152,7 +152,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
 
         // 1. Card Branch
         torch::Tensor card_embs_cat;
-        auto hand_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(0));
+        auto hand_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
         auto flop_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
         auto turn_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(2));
         auto river_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(3));
@@ -247,26 +247,4 @@ struct DeepCFRModelImpl : torch::nn::Module {
     }
 };
 TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>
-
-/*
-void* create_deep_cfr_model();
-torch::Tensor deep_cfr_model_forward(
-    void* model_ptr, 
-    torch::Tensor hands, 
-    torch::Tensor flops, 
-    torch::Tensor turns, 
-    torch::Tensor rivers, 
-    torch::Tensor bet_fracs, 
-    torch::Tensor bet_status
-);
-void delete_deep_cfr_model(void* model_ptr);
-void set_model_eval_mode(void* model_ptr); // If implemented
-std::vector<torch::Tensor> get_model_parameters(void* model_ptr);
-void save_model(void* model_ptr, const std::string& path);
-void* load_model(const std::string& path);
-*/
-
-// test fn
-//void profile_net();
-
 #endif // MODEL_H

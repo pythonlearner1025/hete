@@ -104,7 +104,7 @@ int get_opp(int player) {
 void iterative_traverse(
     int thread_id,
     int player,
-    std::array<DeepCFRModel, NUM_PLAYERS>& nets,
+    std::array<std::string, NUM_PLAYERS> model_paths,
     int t,
     int traversals_per_thread,
     const std::array<double, NUM_PLAYERS>& starting_stacks,
@@ -113,6 +113,7 @@ void iterative_traverse(
     double small_bet,
     double big_bet
 ) {
+    torch::NoGradGuard no_grad_guard;
     PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
 
     auto hands = init_batched_hands(1);
@@ -129,11 +130,12 @@ void iterative_traverse(
     auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
     auto batched_status = init_batched_status(TRAVERSAL_BS);
 
-    DeepCFRModel cpu_net = nets[player];
-    cpu_net->to(cpu_device);
-    cpu_net->eval();
-
-    DeepCFRModel opp_cpu_net = nets[get_opp(player)];
+    DEBUG_NONE("load opp_cpu model");
+    DeepCFRModel opp_cpu_net;
+    if (t > 1) {
+        torch::load(opp_cpu_net, model_paths[get_opp(player)]);
+    }
+    DEBUG_NONE("model loaded");
     opp_cpu_net->to(cpu_device);
     opp_cpu_net->eval();
 
@@ -237,8 +239,10 @@ void iterative_traverse(
                 stack.push(std::make_tuple(depth + 1, std::move(engine), parent_advantage, parent_action));
             }
         }
-
-        DeepCFRModel gpu_net = nets[player];
+        DeepCFRModel gpu_net;
+        if (t > 1) {
+            torch::load(gpu_net, model_paths[player]);
+        }
         gpu_net->to(gpu_device);
         gpu_net->eval();
 
@@ -396,12 +400,12 @@ int main() {
     double big_bet = 1.0;
     int starting_actor = 0;
 
-    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<DeepCFRModel, NUM_PLAYERS>& nets) {
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<std::string, NUM_PLAYERS>& model_paths) {
         try {
             iterative_traverse(
                 thread_id,
                 player, 
-                nets, 
+                model_paths, 
                 cfr_iter, 
                 traversals_per_thread,
                 starting_stacks, 
@@ -431,29 +435,19 @@ int main() {
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         // init models
         std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
+        std::array<std::string, NUM_PLAYERS> model_paths{};
         // load and assign models
         for (int player=0; player<NUM_PLAYERS; ++player) {
             if (cfr_iter > 1) {
                 // Then load the new model and set the references
+                DEBUG_NONE("sample iter");
                 int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
                 std::string iter_model_path = (current_path / std::to_string(sampled_iter) / 
                                             std::to_string(player) / "model.pt").string();
-                try {
-                    DeepCFRModel new_net;
-                    torch::load(new_net, iter_model_path);
-                    new_net->to(cpu_device);
-                    for (size_t j = 0; j < NUM_THREADS; j++) {
-                        nets[j][player] = new_net;
-                    }
-                } catch (const std::exception& e) {
-                    DEBUG_NONE("Error loading model parameters: " << e.what());
-                } 
-                DEBUG_NONE("loaded trained nets into nets");
+                DEBUG_NONE("god model path");
+                model_paths[player] = iter_model_path; 
             } else {
-                for (size_t i=0; i<NUM_THREADS; ++i) {
-                    DeepCFRModel init_model;
-                    nets[i][player] = init_model;
-                }
+                model_paths[player] = "null";
             }
         }
 
@@ -463,13 +457,10 @@ int main() {
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
                 
-                // Create a reference to nets[thread_id]
-                std::array<DeepCFRModel, NUM_PLAYERS>& thread_nets = nets[thread_id];
-                
                 // Capture thread_nets by reference
                 threads.emplace_back(
-                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, &thread_nets]() {
-                        thread_func(traversals_to_run, thread_id, player, cfr_iter, thread_nets);
+                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, &model_paths]() {
+                        thread_func(traversals_to_run, thread_id, player, cfr_iter, model_paths);
                     }
                 );
             } 
@@ -496,7 +487,8 @@ int main() {
             if (train_bs == 0) continue;
             cfr_iter_advs.store(0, std::memory_order_seq_cst);
                         // Add at the top of file
-            const size_t POOL_SIZE = train_bs * 4; // Size of rotating pool
+            size_t total_advs_player = total_advs[player].load();
+            const size_t POOL_SIZE = std::min(train_bs * 4, total_advs_player);
             std::vector<size_t> pool(POOL_SIZE);
             std::iota(pool.begin(), pool.end(), 0);
             std::shuffle(pool.begin(), pool.end(), rng);
