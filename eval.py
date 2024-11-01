@@ -507,7 +507,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_path', type=str)
     parser.add_argument('--num_hands', type=int, default=1000)
     parser.add_argument('--plot_all',type=int, default=1)
-    parser.add_argument('--plot_intervals',type=int, default=5)
+    parser.add_argument('--plot_intervals',type=int, default=1)
     parser.add_argument('--write', type=int, default=1)
     args = parser.parse_args()
     username = args.username
