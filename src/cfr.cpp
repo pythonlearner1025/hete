@@ -21,10 +21,10 @@ struct RandInit {
 } rand_init;
 
 std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
-std::array<std::atomic<size_t>, NUM_PLAYERS> total_advs{};
+std::atomic<size_t> total_advs(0);
 std::atomic<size_t> cfr_iter_advs(0);
 torch::Device cpu_device(torch::kCPU);
-torch::Device gpu_device = torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
+torch::Device gpu_device(torch::kCUDA, 0); // Use first GPU
 constexpr double NULL_VALUE = -42.0;
 
 struct Advantage {
@@ -96,11 +96,6 @@ auto format_scientific = [](int number) -> std::string {
     return oss.str();
 };
 
-int get_opp(int player) {
-    if (player == 1) return 0;
-    else return 1;
-}
-
 void iterative_traverse(
     int thread_id,
     int player,
@@ -130,23 +125,17 @@ void iterative_traverse(
     auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
     auto batched_status = init_batched_status(TRAVERSAL_BS);
 
-    DEBUG_NONE("load opp_cpu model");
-    DeepCFRModel opp_cpu_net;
-    if (t > 1) {
-        torch::load(opp_cpu_net, model_paths[get_opp(player)]);
-    }
-    DEBUG_NONE("model loaded");
-    opp_cpu_net->to(cpu_device);
-    opp_cpu_net->eval();
+    DeepCFRModel cpu_net = nets[player];
+    cpu_net->to(cpu_device);
+    cpu_net->eval();
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
-        int n_total_advs = total_advs[player].load();
+        int n_total_advs = total_advs.load();
         int n_cfr_advs = cfr_iter_advs.load();
         DEBUG_NONE("Thread=" << thread_id
                << " Iter=" << traversal
                << " Cfr_iter_advs=" << format_scientific(n_cfr_advs)
-               << " Player=" << player
-               << " Total_player_advs=" << format_scientific(n_total_advs));
+               << " Total_advs=" << format_scientific(n_total_advs));
         // Reset manipulators to default formatting if needed
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
@@ -214,13 +203,13 @@ void iterative_traverse(
                 // opponent case
                 int actor = engine.turn();
                 auto state = std::make_shared<State>();
-                get_state(engine, state.get(), actor);
+                get_state(engine, state.get(), player);
                 update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
-                if (opp_cpu_net.get() == nullptr) {
+                if (cpu_net.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = opp_cpu_net->forward(
+                torch::Tensor logits = cpu_net->forward(
                     hands, 
                     flops, 
                     turns, 
@@ -320,7 +309,6 @@ void iterative_traverse(
 
             // Calculate advantages
             std::array<double, NUM_ACTIONS> adv_values;
-        
             for (size_t a = 0; a < NUM_ACTIONS; ++a) {
                 if (!terminal_adv->is_illegal[a]) {
                     double ad = terminal_adv->values[a] - ev;
@@ -330,11 +318,11 @@ void iterative_traverse(
                 }
             }
 
-            size_t current_player_total = total_advs[player].fetch_add(1);
-            if (current_player_total < MAX_SIZE) {
-                global_player_advs[player][current_player_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
+            size_t current_total = total_advs.fetch_add(1);
+            if (current_total < MAX_SIZE) {
+                global_player_advs[player][current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
             } else {
-                size_t r = std::rand() % (current_player_total + 1);
+                size_t r = std::rand() % (current_total + 1);
                 if (r < MAX_SIZE) {
                     global_player_advs[player][r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
                 }
@@ -479,7 +467,7 @@ int main() {
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << cfr_iter_advs.load());
-            DEBUG_WRITE(logfile, "PLAYER COLLECTED ADVS = " << total_advs[player].load());
+            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs.load());
             DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
@@ -504,6 +492,11 @@ int main() {
                         pool.begin() + window_start + train_bs);
                 std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
                 window_start = (window_start + train_bs) % POOL_SIZE;
+
+                DEBUG_NONE("Advantage value sample before update: " << global_player_advs[player][pool[0]].advantages[0]);
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    DEBUG_NONE("Raw advantage [" << a << "]: " << global_player_advs[player][pool[0]].advantages[a]);
+                }
 
                 for (size_t i = 0; i < train_bs; ++i) {
                     State S = global_player_advs[player][pool[i]].state;
@@ -534,6 +527,13 @@ int main() {
                     batched_fracs.slice(0, 0, train_bs).to(gpu_device), 
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
+
+                DEBUG_NONE("Pred tensor contains zeros only: " << std::to_string(pred.abs().sum().item<float>() == 0));
+                DEBUG_NONE("Advantages tensor contains zeros only: " << std::to_string(batched_advs.abs().sum().item<float>() == 0));
+                DEBUG_NONE("Pred shape: " << pred.sizes());
+                DEBUG_NONE("Target shape: " << batched_advs.slice(0, 0, train_bs).sizes());
+                DEBUG_NONE("Pred sample: " << pred.slice(0, 0, 5));
+                DEBUG_NONE("Target sample: " << batched_advs.slice(0, 0, 5));
 
                 auto loss = torch::nn::functional::mse_loss(
                     pred, 
