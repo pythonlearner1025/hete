@@ -20,12 +20,29 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
+std::array<std::mutex, NUM_PLAYERS> player_advs_mutex;
 std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
-std::atomic<size_t> total_advs(0);
+std::array<std::atomic<size_t>, NUM_PLAYERS> total_advs{};
 std::atomic<size_t> cfr_iter_advs(0);
 torch::Device cpu_device(torch::kCPU);
-torch::Device gpu_device(torch::kCUDA, 0); // Use first GPU
+torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
+
+// Replace direct access with this function:
+void safe_add_advantage(int player, const TraverseAdvantage& adv) {
+    std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
+    size_t current_total = total_advs[player].load();
+    
+    if (current_total < MAX_SIZE) {
+        global_player_advs[player][current_total] = adv;
+        total_advs[player].fetch_add(1);
+    } else {
+        thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, current_total - 1);
+        size_t r = dist(rng); // Use thread-safe random number
+        global_player_advs[player][r] = adv;
+    }
+}
 
 struct Advantage {
     std::array<double, NUM_ACTIONS> values;
@@ -96,6 +113,11 @@ auto format_scientific = [](int number) -> std::string {
     return oss.str();
 };
 
+int get_opp(int player) {
+    if (player == 1) return 0;
+    return 1;
+}
+
 void iterative_traverse(
     int thread_id,
     int player,
@@ -108,7 +130,7 @@ void iterative_traverse(
     double small_bet,
     double big_bet
 ) {
-    torch::NoGradGuard no_grad_guard;
+    //torch::NoGradGuard no_grad_guard;
     PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
 
     auto hands = init_batched_hands(1);
@@ -125,12 +147,18 @@ void iterative_traverse(
     auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
     auto batched_status = init_batched_status(TRAVERSAL_BS);
 
-    DeepCFRModel cpu_net = nets[player];
-    cpu_net->to(cpu_device);
-    cpu_net->eval();
+    DEBUG_NONE("loading");
+    DeepCFRModel opp_net;
+    if (t>1) {
+        torch::load(opp_net, model_paths[get_opp(player)]);
+    }
+    opp_net->to(cpu_device);
+    opp_net->eval();
+    DEBUG_NONE("loaded");
+    DEBUG_NONE("moved to eval");
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
-        int n_total_advs = total_advs.load();
+        int n_total_advs = total_advs[player].load();
         int n_cfr_advs = cfr_iter_advs.load();
         DEBUG_NONE("Thread=" << thread_id
                << " Iter=" << traversal
@@ -144,10 +172,11 @@ void iterative_traverse(
         stack.push({0, initial_engine, nullptr, -1});
 
         while (!stack.empty()) {
-
-            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+            //if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+            if (all_advs.size() >= CFR_MAX_SIZE) {
                 DEBUG_NONE("exceeds_max = True");
-                return;
+                //return;
+                break;
             }
             
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
@@ -206,10 +235,10 @@ void iterative_traverse(
                 get_state(engine, state.get(), player);
                 update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
-                if (cpu_net.get() == nullptr) {
+                if (opp_net.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = cpu_net->forward(
+                torch::Tensor logits = opp_net->forward(
                     hands, 
                     flops, 
                     turns, 
@@ -234,7 +263,6 @@ void iterative_traverse(
         }
         gpu_net->to(gpu_device);
         gpu_net->eval();
-
         // Begin batch inference
         DEBUG_NONE("batch inference time");
         DEBUG_NONE("num_advs = " << all_advs.size());
@@ -318,15 +346,7 @@ void iterative_traverse(
                 }
             }
 
-            size_t current_total = total_advs.fetch_add(1);
-            if (current_total < MAX_SIZE) {
-                global_player_advs[player][current_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
-            } else {
-                size_t r = std::rand() % (current_total + 1);
-                if (r < MAX_SIZE) {
-                    global_player_advs[player][r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
-                }
-            }
+            safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values});
 
             if (terminal_adv->parent.expired()) {
                 // Handle case where parent no longer exists
@@ -388,7 +408,7 @@ int main() {
     double big_bet = 1.0;
     int starting_actor = 0;
 
-    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<std::string, NUM_PLAYERS>& model_paths) {
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<std::string, NUM_PLAYERS> model_paths) {
         try {
             iterative_traverse(
                 thread_id,
@@ -423,12 +443,11 @@ int main() {
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         // init models
         std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
-        std::array<std::string, NUM_PLAYERS> model_paths{};
+        std::array<std::string, NUM_PLAYERS> model_paths{"null"};
         // load and assign models
         for (int player=0; player<NUM_PLAYERS; ++player) {
             if (cfr_iter > 1) {
                 // Then load the new model and set the references
-                DEBUG_NONE("sample iter");
                 int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
                 std::filesystem::path iter_model_path = current_path;
                 iter_model_path /= std::to_string(sampled_iter);
@@ -436,9 +455,7 @@ int main() {
                 iter_model_path /= "model.pt";
                 std::string path_str = iter_model_path.string(); 
                 model_paths[player] = path_str; 
-            } else {
-                model_paths[player] = "null";
-            }
+            } 
         }
 
         for (int player=0; player<NUM_PLAYERS; ++player) {
@@ -447,9 +464,10 @@ int main() {
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
                 
+                DEBUG_NONE("spawning thread");
                 // Capture thread_nets by reference
                 threads.emplace_back(
-                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, &model_paths]() {
+                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, model_paths]() {
                         thread_func(traversals_to_run, thread_id, player, cfr_iter, model_paths);
                     }
                 );
@@ -464,10 +482,11 @@ int main() {
             // fresh net to train
             DeepCFRModel train_net;
             train_net->to(gpu_device);
+            train_net->train();
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << cfr_iter_advs.load());
-            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs.load());
+            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs[player].load());
             DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
@@ -476,14 +495,13 @@ int main() {
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             if (train_bs == 0) continue;
             cfr_iter_advs.store(0, std::memory_order_seq_cst);
-                        // Add at the top of file
             size_t total_advs_player = total_advs[player].load();
             const size_t POOL_SIZE = std::min(train_bs * 4, total_advs_player);
             std::vector<size_t> pool(POOL_SIZE);
             std::iota(pool.begin(), pool.end(), 0);
             std::shuffle(pool.begin(), pool.end(), rng);
             size_t window_start = 0;
-
+            torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
             // Inside the training loop
             for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
                 // Rotate and shuffle window
@@ -492,11 +510,6 @@ int main() {
                         pool.begin() + window_start + train_bs);
                 std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
                 window_start = (window_start + train_bs) % POOL_SIZE;
-
-                DEBUG_NONE("Advantage value sample before update: " << global_player_advs[player][pool[0]].advantages[0]);
-                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                    DEBUG_NONE("Raw advantage [" << a << "]: " << global_player_advs[player][pool[0]].advantages[a]);
-                }
 
                 for (size_t i = 0; i < train_bs; ++i) {
                     State S = global_player_advs[player][pool[i]].state;
@@ -517,7 +530,6 @@ int main() {
                     int iteration = global_player_advs[player][pool[i]].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
-                torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
 
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs).to(gpu_device),
@@ -528,20 +540,13 @@ int main() {
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
 
-                DEBUG_NONE("Pred tensor contains zeros only: " << std::to_string(pred.abs().sum().item<float>() == 0));
-                DEBUG_NONE("Advantages tensor contains zeros only: " << std::to_string(batched_advs.abs().sum().item<float>() == 0));
-                DEBUG_NONE("Pred shape: " << pred.sizes());
-                DEBUG_NONE("Target shape: " << batched_advs.slice(0, 0, train_bs).sizes());
-                DEBUG_NONE("Pred sample: " << pred.slice(0, 0, 5));
-                DEBUG_NONE("Target sample: " << batched_advs.slice(0, 0, 5));
-
                 auto loss = torch::nn::functional::mse_loss(
                     pred, 
                     batched_advs.slice(0, 0, train_bs).to(gpu_device),
                     torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
                 );
 
-                loss *= batched_iters.slice(0, 0, train_bs).to(gpu_device).to(torch::kFloat32) / static_cast<float>(CFR_ITERS);
+                loss *= batched_iters.slice(0, 0, train_bs).to(torch::kFloat32).to(gpu_device) / static_cast<float>(CFR_ITERS);
                 auto batch_mean_loss = loss.mean(1).mean();
                 batch_mean_loss.backward();
                 torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
@@ -552,7 +557,6 @@ int main() {
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
 
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
-            train_net->to(cpu_device);
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
