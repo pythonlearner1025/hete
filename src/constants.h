@@ -5,7 +5,7 @@
 constexpr size_t NUM_PLAYERS = 2;
 constexpr size_t NUM_TRAVERSALS = 1000;
 constexpr size_t MAX_SIZE = 4e7; // Adjust this based on your expected maximum number of advantages
-constexpr size_t CFR_MAX_SIZE = 5e6;
+constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 6;
 constexpr size_t CFR_ITERS = 300;
@@ -19,7 +19,7 @@ constexpr int BOARD_SIZE = 5;
 constexpr int64_t MODEL_DIM = 256;
 
 // training
-constexpr size_t TRAIN_BS = 32000;
+constexpr size_t TRAIN_BS = 3200;
 constexpr size_t TRAVERSAL_BS = 2048;
 constexpr size_t TRAIN_EPOCHS = 1;
 constexpr size_t TRAIN_ITERS = 8000;
