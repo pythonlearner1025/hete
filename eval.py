@@ -497,6 +497,62 @@ def Login(username, password):
         sys.exit(-1)
     return token
 
+def auto(log_path, start_iter, num_hands=10):
+    import time
+    eval_cfr_iter = start_iter
+    while 1:
+        both_player_exists = True
+        for i in range(NUM_PLAYERS):
+            path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.pt')
+            if not os.path.exists(path):
+                both_player_exists = False
+        
+        if both_player_exists:
+            player_models = dict()
+
+            for i in range(NUM_PLAYERS):
+                assert eval_cfr_iter == -1 or eval_cfr_iter < len(os.listdir(MODELS_PATH))
+                path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.pt')
+                player_models[i] = path   
+
+            if username and password:
+                token = Login(username, password)
+            else:
+                token = None
+
+            errors = []
+            winnings = 0
+            bb = 150
+            for h in range(num_hands):
+                try:
+                    (token, hand_winnings) = PlayHand(player_models, token)
+                    winnings += hand_winnings
+                except Exception as e:
+                    print(f"skipping hand {h} due to error: {e}")
+                    errors.append(str(e))
+
+            eval_results = {
+                'eval_cfr_iter': eval_cfr_iter,
+                'total_winnings_mbb': winnings/bb*1000,
+                'mbb_per_hand': (winnings/bb)/num_hands*1000,
+                'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
+            }
+
+            if write:
+                with open(f'{log_path}/eval.log', 'a') as f:
+                    for key, value in eval_results.items():
+                        log_line = f'{key} = {value}\n'
+                        f.write(log_line)
+                
+                with open(f'{log_path}/eval_errs.log', 'a') as f:
+                    for err in errors:
+                        f.write(err + '\n')
+            eval_cfr_iter += 1
+        else:
+            time.sleep(10)
+            print('sleeping 10 seconds...')
+
+
 if __name__ == '__main__':
     global baseline_totals, NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS
     import sys
@@ -513,6 +569,7 @@ if __name__ == '__main__':
     parser.add_argument('--log_path', type=str)
     parser.add_argument('--num_hands', type=int, default=1000)
     parser.add_argument('--plot_all',type=int, default=1)
+    parser.add_argument('--start_iter', type=int, default=1)
     parser.add_argument('--plot_intervals',type=int, default=1)
     parser.add_argument('--write', type=int, default=1)
     args = parser.parse_args()
@@ -521,6 +578,7 @@ if __name__ == '__main__':
     log_path = args.log_path
     num_hands = args.num_hands
     plot_all = args.plot_all
+    start_iter = args.start_iter
     plot_intervals = args.plot_intervals
     write = args.write
 
@@ -528,10 +586,13 @@ if __name__ == '__main__':
     MODELS_PATH = log_path
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
+    auto(log_path, start_iter, num_hands=num_hands)
+    exit(-1)
+
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
     total_iters = len(only_dirs) if plot_all else 1
 
-    for eval_cfr_iter in range(1, total_iters+1, plot_intervals):
+    for eval_cfr_iter in range(start_iter, total_iters+1, plot_intervals):
 
         player_models = dict()
 
@@ -550,6 +611,7 @@ if __name__ == '__main__':
         #   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         errors = []
         winnings = 0
+        bb = 150
         for h in range(num_hands):
             try:
                 (token, hand_winnings) = PlayHand(player_models, token)
@@ -560,9 +622,9 @@ if __name__ == '__main__':
 
         eval_results = {
             'eval_cfr_iter': eval_cfr_iter,
-            'total_winnings': winnings,
-            'bb_per_100': winnings/150,
-            'session_baseline_total_avg': sum(baseline_totals)/len(baseline_totals) if baseline_totals else 0
+            'total_winnings_mbb': winnings/bb*1000,
+            'mbb_per_hand': (winnings/bb)/num_hands*1000,
+            'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
         }
 
         if write:
@@ -570,7 +632,6 @@ if __name__ == '__main__':
                 for key, value in eval_results.items():
                     log_line = f'{key} = {value}\n'
                     f.write(log_line)
-                    print(log_line.strip())  # Print without the newline character
             
             with open(f'{log_path}/eval_errs.log', 'a') as f:
                 for err in errors:
