@@ -28,8 +28,7 @@ torch::Device cpu_device(torch::kCPU);
 torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
 
-// Replace direct access with this function:
-void safe_add_advantage(int player, const TraverseAdvantage& adv) {
+void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
     std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
     size_t current_total = total_advs[player].load();
     
@@ -37,9 +36,8 @@ void safe_add_advantage(int player, const TraverseAdvantage& adv) {
         global_player_advs[player][current_total] = adv;
         total_advs[player].fetch_add(1);
     } else {
-        thread_local std::mt19937 rng(std::random_device{}());
         std::uniform_int_distribution<size_t> dist(0, current_total - 1);
-        size_t r = dist(rng); // Use thread-safe random number
+        size_t r = dist(rng);
         global_player_advs[player][r] = adv;
     }
 }
@@ -130,7 +128,8 @@ void iterative_traverse(
     double small_bet,
     double big_bet
 ) {
-    //torch::NoGradGuard no_grad_guard;
+    torch::NoGradGuard no_grad_guard;
+    std::mt19937 rng(std::random_device{}() + thread_id);  // Add thread_id to make seed unique per thread
     PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
 
     auto hands = init_batched_hands(1);
@@ -172,11 +171,9 @@ void iterative_traverse(
         stack.push({0, initial_engine, nullptr, -1});
 
         while (!stack.empty()) {
-            //if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
-            if (all_advs.size() >= CFR_MAX_SIZE) {
+            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
                 DEBUG_NONE("exceeds_max = True");
-                //return;
-                break;
+                return;
             }
             
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
@@ -346,7 +343,7 @@ void iterative_traverse(
                 }
             }
 
-            safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values});
+            safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values}, rng);
 
             if (terminal_adv->parent.expired()) {
                 // Handle case where parent no longer exists
