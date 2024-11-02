@@ -499,6 +499,12 @@ def Login(username, password):
 
 if __name__ == '__main__':
     global baseline_totals, NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS
+    import sys
+    import os
+    print("Python Path:", sys.path)
+    print("LD_LIBRARY_PATH:", os.environ.get('LD_LIBRARY_PATH'))
+    print("Current working directory:", os.getcwd())
+    print("Loaded modules before torch:", list(sys.modules.keys()))
 
     baseline_totals = []
     parser = argparse.ArgumentParser(description='Slumbot API example')
