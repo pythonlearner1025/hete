@@ -120,3 +120,30 @@ def prepare_infoset(
     bet_status = torch.tensor(betting_status, dtype=torch.float).unsqueeze(0)  # N x (2 * nbets)
 
     return cards, bet_fracs, bet_status
+
+def transform_line(line):
+   if 'eval_cfr_iter' in line:
+       return line
+   
+   # Replace the field names first
+   line = line.replace('total_winnings', 'total_winnings_bb')
+   line = line.replace('bb_per_100', 'bb_per_hand')
+   line = line.replace('session_baseline_total_avg', 'session_baseline_total_avg_bb')
+   
+   # If it's a value line, divide the number by 150
+   if '=' in line:
+       field, value = line.split('=')
+       value = float(value.strip())
+       value = value / 150
+       line = f"{field.strip()} = {value}"
+   
+   return line
+
+def process_file(input_text):
+   output_lines = []
+   for line in input_text.split('\n'):
+       if line.strip():  # Skip empty lines
+           output_lines.append(transform_line(line))
+   return '\n'.join(output_lines)
+
+# To use, paste the text as a string and call process_file()
