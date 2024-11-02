@@ -95,20 +95,20 @@ struct DeepCFRModelImpl :  torch::nn::Module {
     torch::nn::Linear comb1{nullptr}, comb2{nullptr}, comb3{nullptr};
     torch::nn::LayerNorm norm{nullptr};
     torch::nn::Linear action_head{nullptr};
+    CardEmbedding hand_embed{nullptr};
+    CardEmbedding flop_embed{nullptr};
+    CardEmbedding turn_embed{nullptr};
+    CardEmbedding river_embed{nullptr};
 
     // Constructor
     DeepCFRModelImpl(){
         
         int64_t n_card_types = 4;
-        // Initialize card_embeddings ModuleList
-        card_embeddings = register_module("card_embeddings", torch::nn::ModuleList());
 
-        for(int64_t i = 0; i < n_card_types; ++i){
-            // Create and add CardEmbedding modules to the list
-            CardEmbedding embedding;
-            auto card_embedding = embedding;
-            card_embeddings->push_back(card_embedding);
-        }
+        hand_embed = register_module("hand_embed", CardEmbedding());
+        flop_embed = register_module("flop_embed", CardEmbedding());
+        turn_embed = register_module("turn_embed", CardEmbedding());
+        river_embed = register_module("river_embed", CardEmbedding());
 
         // Initialize card linear layers
         card1 = register_module("card1", torch::nn::Linear(MODEL_DIM* n_card_types,MODEL_DIM));
@@ -152,10 +152,6 @@ struct DeepCFRModelImpl :  torch::nn::Module {
 
         // 1. Card Branch
         torch::Tensor card_embs_cat;
-        auto hand_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
-        auto flop_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(1));
-        auto turn_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(2));
-        auto river_embed = std::dynamic_pointer_cast<CardEmbeddingImpl>(card_embeddings->ptr(3));
         torch::Tensor hand_emb = hand_embed->forward(hand);
         torch::Tensor flop_emb = flop_embed->forward(flop);
         torch::Tensor turn_emb = turn_embed->forward(turn);
@@ -195,55 +191,6 @@ struct DeepCFRModelImpl :  torch::nn::Module {
         auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
         //std::cout << "forward complete" << std::endl;
         return output;
-    }
-
-        // Model class is inherited from public nn::Module
-    std::vector<char> get_the_bytes(std::string filename) {
-        std::ifstream input(filename, std::ios::binary);
-        std::vector<char> bytes(
-            (std::istreambuf_iterator<char>(input)),
-            (std::istreambuf_iterator<char>()));
-
-        input.close();
-        return bytes;
-    }
-        
-    void load_parameters(std::string pt_path) {
-        try {
-            // Read file bytes
-            std::vector<char> f = this->get_the_bytes(pt_path);
-            
-            // Load weights from pickle
-            c10::Dict<torch::jit::IValue, torch::jit::IValue> weights = 
-                torch::pickle_load(f).toGenericDict();
-            
-            // Get current model parameters
-            auto model_params = this->named_parameters();
-            std::vector<std::string> param_names;
-            for (const auto& w : model_params) {
-                param_names.push_back(w.key());
-            }
-
-            // Update parameters
-            torch::NoGradGuard no_grad;
-            for (const auto& w : weights) {
-                std::string name = w.key().toStringRef();
-                at::Tensor param = w.value().toTensor();
-
-                auto param_it = model_params.find(name);
-                if (std::find(param_names.begin(), param_names.end(), name) != param_names.end()) {
-                    model_params.find(name)->copy_(param);
-                } else {
-                    std::cout << "Warning: Parameter '" << name 
-                            << "' does not exist in model" << std::endl;
-                }
-            }
-            
-            std::cout << "Successfully loaded parameters from " << pt_path << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Error loading parameters: " << e.what() << std::endl;
-            throw;
-        }
     }
 };
 TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>
