@@ -63,7 +63,7 @@ struct Advantage {
         int parent_action_ = -1,
         const State state_ = {},
         int depth_ = 0,
-        int num_children = 0
+        int unprocessed_children_ = 0
     ) :
         values(values_),
         strat(strat_),
@@ -71,8 +71,8 @@ struct Advantage {
         parent(parent_adv),
         parent_action(parent_action_),
         state(state_),
-        depth(depth_),
-        unprocessed_children(num_children)
+        depth(depth),
+        unprocessed_children(unprocessed_children_)
     {
         if (values_.empty()) {
             values.fill(0.0);
@@ -114,6 +114,259 @@ auto format_scientific = [](int number) -> std::string {
 int get_opp(int player) {
     if (player == 1) return 0;
     return 1;
+}
+
+std::string format_array(const std::array<double, NUM_ACTIONS>& arr) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4) << "[";
+    for (size_t i = 0; i < arr.size(); ++i) {
+        ss << arr[i];
+        if (i < arr.size() - 1) ss << ", ";
+    }
+    ss << "]";
+    return ss.str();
+}
+
+std::string format_game_state(const State& state) {
+    std::stringstream ss;
+    ss << "Hand: [" << state.hand[0] << "," << state.hand[1] << "] "
+       << "Board: [" << state.flop[0] << "," << state.flop[1] << "," 
+       << state.flop[2] << "," << state.turn[0] << "," << state.river[0] << "]";
+    return ss.str();
+}
+
+// https://proceedings.neurips.cc/paper_files/paper/2012/file/3df1d4b96d8976ff5986393e8767f5b2-Paper.pdf
+void avg_sampling(
+    int thread_id,
+    int player,
+    std::array<std::string, NUM_PLAYERS> model_paths,
+    int t,
+    int traversals_per_thread,
+    const std::array<double, NUM_PLAYERS>& starting_stacks,
+    const std::array<double, NUM_PLAYERS>& antes,
+    int starting_actor,
+    double small_bet,
+    double big_bet,
+    std::string logfile
+) {
+    torch::NoGradGuard no_grad_guard;
+    std::mt19937 rng(std::random_device{}() + thread_id);  // Add thread_id to make seed unique per thread
+    PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
+
+    auto hands = init_batched_hands(1);
+    auto flops = init_batched_flops(1);
+    auto turns = init_batched_turns(1);
+    auto rivers = init_batched_rivers(1);
+    auto bet_fracs = init_batched_fracs(1);
+    auto bet_status = init_batched_status(1);
+
+    auto batched_hands = init_batched_hands(TRAVERSAL_BS);
+    auto batched_flops = init_batched_flops(TRAVERSAL_BS);
+    auto batched_turns = init_batched_turns(TRAVERSAL_BS);
+    auto batched_rivers = init_batched_rivers(TRAVERSAL_BS);
+    auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
+    auto batched_status = init_batched_status(TRAVERSAL_BS);
+
+    DeepCFRModel opp_net;
+    if (t>1) {
+        torch::load(opp_net, model_paths[get_opp(player)]);
+    }
+    opp_net->to(cpu_device);
+    opp_net->eval();
+
+    DeepCFRModel player_net;
+    if (t > 1) {
+        torch::load(player_net, model_paths[player]);
+    }
+    player_net->to(gpu_device);
+    player_net->eval();
+
+    for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
+        int n_total_advs = total_advs[player].load();
+        int n_cfr_advs = cfr_iter_advs.load();
+        DEBUG_NONE("Thread=" << thread_id
+               << " Iter=" << traversal
+               << " Cfr_iter_advs=" << format_scientific(n_cfr_advs));
+        // Reset manipulators to default formatting if needed
+        std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int, float>> stack;
+        std::stack<std::shared_ptr<Advantage>> terminal_advs;
+        std::deque<std::shared_ptr<Advantage>> all_advs;
+
+        stack.push({0, initial_engine, nullptr, -1, 1.0});
+
+        while (!stack.empty()) {
+            auto [depth, engine, parent_advantage, parent_action, sample_p] = stack.top();
+            stack.pop();
+
+            if (!engine.get_game_status() || !engine.is_playing(player)) {
+                std::array<double, NUM_PLAYERS> payoff = engine.get_payoffs();
+                double bb = engine.get_big_blind();
+                double final_value = payoff[player] / bb;
+
+                /*
+                DEBUG_WRITE(logfile, "TERMINAL NODE:"
+                << "\n  Depth: " << depth
+                << "\n  Final Value: " << final_value);
+                */
+
+                if (parent_advantage != nullptr) {
+                    parent_advantage->values[parent_action] = final_value;
+                    parent_advantage->unprocessed_children--;
+                    if (parent_advantage->unprocessed_children == 0) {
+                        terminal_advs.push(parent_advantage);
+                    }
+                }
+            }
+            else if (engine.turn() == player) {
+                auto state = std::make_shared<State>();
+                get_state(engine, state.get(), player);
+                update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
+                
+                /*
+                DEBUG_WRITE(logfile, "PLAYER NODE:"
+                << "\n  Depth: " << depth
+                << "\n  Game State: " << format_game_state(*state)
+                << "\n  Reach Prob: " << sample_p);
+                */
+
+                std::array<bool, NUM_ACTIONS> is_illegal{false};
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    if (!verify_action(&engine, player, a)) is_illegal[a] = true;
+                }
+
+                torch::Tensor regrets = player_net->forward(
+                    hands, 
+                    flops, 
+                    turns, 
+                    rivers, 
+                    bet_fracs, 
+                    bet_status
+                );
+
+                std::array<double, NUM_ACTIONS> probs = sample_prob(regrets, BETA);
+                std::array<double, NUM_ACTIONS> strat = regret_match(regrets);
+
+                //DEBUG_WRITE(logfile, "  Strategy: " << format_array(strat) << " Sample: " << format_array(probs));
+
+                auto adv_ptr = std::make_shared<Advantage>(
+                    std::array<double, NUM_ACTIONS>{},
+                    strat,
+                    is_illegal,
+                    parent_advantage,
+                    parent_action,
+                    *state
+                );
+
+                adv_ptr->depth = depth;
+                all_advs.push_back(adv_ptr);
+
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    float r = sample_uniform(); 
+                    float p = std::max(EPSILON, static_cast<double>(probs[a]));
+                    if (!is_illegal[a] && r < p) {
+                        PokerEngine new_engine = engine.copy();
+                        take_action(&new_engine, player, a);
+                        float act_sample_p = std::min(static_cast<double>(p), 1.0);
+                        stack.push({
+                            depth + 1, 
+                            new_engine, 
+                            adv_ptr, 
+                            static_cast<int>(a), 
+                            act_sample_p
+                        });
+                        adv_ptr->unprocessed_children++;
+                        //DEBUG_WRITE(logfile, "  Chosen Action: " << a 
+                        //<< "\n  Action Prob: " << act_sample_p);
+                    }
+                }
+            }
+            else {
+                // opponent case
+                int actor = engine.turn();
+                auto state = std::make_shared<State>();
+                get_state(engine, state.get(), player);
+                update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
+
+                /*
+                DEBUG_WRITE(logfile, "OPPONENT NODE:"
+                << "\n  Depth: " << depth
+                << "\n  Game State: " << format_game_state(*state));
+                */
+
+                if (opp_net.get() == nullptr) {
+                    throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
+                }
+                torch::Tensor regrets = opp_net->forward(
+                    hands, 
+                    flops, 
+                    turns, 
+                    rivers, 
+                    bet_fracs, 
+                    bet_status
+                );
+                std::array<double, NUM_ACTIONS> strat = regret_match(regrets);
+
+                int action_index = sample_action(strat);
+                while (!verify_action(&engine, actor, action_index)) {
+                    action_index = (action_index - 1 + NUM_ACTIONS) % NUM_ACTIONS;
+                }
+                take_action(&engine, actor, action_index);
+                stack.push({depth + 1, std::move(engine), parent_advantage, parent_action, sample_p});
+            }
+        }
+
+        //DEBUG_WRITE(logfile, " N_TERMINAL_ADVS: " << terminal_advs.size());
+
+        while (!terminal_advs.empty()) {
+            auto terminal_adv = terminal_advs.top();
+            terminal_advs.pop();
+
+            // Backpropagate to parent
+            if (auto parent_adv_ptr = terminal_adv->parent.lock()) {
+                if (parent_adv_ptr == nullptr || parent_adv_ptr == terminal_adv) {
+                    //DEBUG_WRITE(logfile, "  WARNING: Parent pointer is null or cyclic");
+                    continue;
+                }
+
+                // ev of the terminal node
+                double ev = 0.0;
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    if (!terminal_adv->is_illegal[a]) {
+                        ev += terminal_adv->values[a] * parent_adv_ptr->strat[a];
+                    }
+                }
+
+                // Calculate advantages
+                std::array<double, NUM_ACTIONS> adv_values;
+                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    if (!terminal_adv->is_illegal[a]) {
+                        double ad = terminal_adv->values[a] - ev;
+                        adv_values[a] = (ad > 0.0) ? ad : (1.0 / static_cast<double>(NUM_ACTIONS));
+                    } else {
+                        adv_values[a] = 0.0;
+                    }
+                }
+
+                safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values}, rng);
+                cfr_iter_advs.fetch_add(1);
+
+                /*
+                DEBUG_WRITE(logfile, "PROCESSING TERMINAL ADVANTAGE:"
+                << "\n  Depth: " << terminal_adv->depth
+                << "\n  Unprocessed Children: " << terminal_adv->unprocessed_children
+                << "\n  Values: " << format_array(terminal_adv->values)
+                << "\n  Calculated EV: " << ev);
+                */
+                // value of node = reach prob of node * ev of node
+                parent_adv_ptr->values[terminal_adv->parent_action] = ev;
+                parent_adv_ptr->unprocessed_children--;
+
+                if (parent_adv_ptr->unprocessed_children == 0) {
+                    terminal_advs.push(parent_adv_ptr);
+                }
+            }
+        }
+    }
 }
 
 void iterative_traverse(
@@ -235,7 +488,7 @@ void iterative_traverse(
                 if (opp_net.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = opp_net->forward(
+                torch::Tensor regrets = opp_net->forward(
                     hands, 
                     flops, 
                     turns, 
@@ -243,7 +496,9 @@ void iterative_traverse(
                     bet_fracs, 
                     bet_status
                 );
-                std::array<double, NUM_ACTIONS> strat = regret_match(logits);
+
+                // logits are regrets
+                std::array<double, NUM_ACTIONS> strat = regret_match(regrets);
 
                 int action_index = sample_action(strat);
                 while (!verify_action(&engine, actor, action_index)) {
@@ -294,7 +549,7 @@ void iterative_traverse(
                 advs_idx++;
             }
 
-            auto logits = gpu_net->forward(
+            auto regrets = gpu_net->forward(
                 batched_hands.slice(0,0,batch_size).to(gpu_device),
                 batched_flops.slice(0,0,batch_size).to(gpu_device),
                 batched_turns.slice(0,0,batch_size).to(gpu_device),
@@ -303,8 +558,8 @@ void iterative_traverse(
                 batched_status.slice(0,0,batch_size).to(gpu_device))
             .to(cpu_device);
 
-            auto regrets = regret_match_batched(logits);
-            auto regrets_a = regrets.accessor<float, 2>();
+            auto strat = regret_match_batched(regrets);
+            auto strat_a = strat.accessor<float, 2>();
 
             for (size_t i = 0; i < batch_size; ++i) {
                 auto& adv = all_advs[advs_idx-batch_size+i];
@@ -314,8 +569,8 @@ void iterative_traverse(
                     continue;
                 }
                 for (size_t j = 0; j < NUM_ACTIONS; ++j) {
-                    float regret = regrets_a[i][j];
-                    adv->strat[j] = regret;
+                    float strat_val = strat_a[i][j];
+                    adv->strat[j] = strat_val;
                 }
             } 
         }
@@ -332,7 +587,7 @@ void iterative_traverse(
                 }
             }
 
-            // Calculate advantages
+            // Calculate advantages (advs are regrets)
             std::array<double, NUM_ACTIONS> adv_values;
             for (size_t a = 0; a < NUM_ACTIONS; ++a) {
                 if (!terminal_adv->is_illegal[a]) {
@@ -407,7 +662,7 @@ int main() {
 
     auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<std::string, NUM_PLAYERS> model_paths) {
         try {
-            iterative_traverse(
+            avg_sampling(
                 thread_id,
                 player, 
                 model_paths, 
@@ -417,7 +672,8 @@ int main() {
                 antes,
                 starting_actor,
                 small_bet, 
-                big_bet
+                big_bet,
+                logfile
             );
         }
         catch(const std::exception& e) {
@@ -489,7 +745,6 @@ int main() {
             std::mt19937 rng(rd());
             std::uniform_real_distribution<double> dist(0.0, 1.0);
             size_t train_bs = std::min(TRAIN_BS, cfr_iter_advs.load());
-            DEBUG_NONE("TRAIN_BS = " << train_bs);
             if (train_bs == 0) continue;
             cfr_iter_advs.store(0, std::memory_order_seq_cst);
             size_t total_advs_player = total_advs[player].load();
@@ -499,8 +754,13 @@ int main() {
             std::shuffle(pool.begin(), pool.end(), rng);
             size_t window_start = 0;
             torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
-            // Inside the training loop
-            for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
+
+            size_t train_iters = std::min(TRAIN_ITERS, static_cast<size_t>(total_advs_player / TRAIN_BS * TRAIN_EPOCHS));
+            DEBUG_NONE("TRAIN_BS = " << train_bs);
+            DEBUG_NONE("TRAIN_ITERS = " << train_iters);
+            DEBUG_WRITE(logfile, "TRAIN_ITERS = " << train_iters);
+
+            for (size_t train_iter = 0; train_iter < train_iters; ++train_iter) {
                 // Rotate and shuffle window
                 std::rotate(pool.begin(), 
                         pool.begin() + window_start, 

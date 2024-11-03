@@ -538,15 +538,14 @@ def auto(log_path, start_iter, num_hands=10):
                 'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
             }
 
-            if write:
-                with open(f'{log_path}/eval.log', 'a') as f:
-                    for key, value in eval_results.items():
-                        log_line = f'{key} = {value}\n'
-                        f.write(log_line)
-                
-                with open(f'{log_path}/eval_errs.log', 'a') as f:
-                    for err in errors:
-                        f.write(err + '\n')
+            with open(f'{log_path}/eval.log', 'a') as f:
+                for key, value in eval_results.items():
+                    log_line = f'{key} = {value}\n'
+                    f.write(log_line)
+            
+            with open(f'{log_path}/eval_errs.log', 'a') as f:
+                for err in errors:
+                    f.write(err + '\n')
             eval_cfr_iter += 1
         else:
             time.sleep(10)

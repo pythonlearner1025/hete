@@ -119,10 +119,6 @@ def process_file(input_text):
 def main():
     args = parse_args()
     log_path = args.log_path
-    with open(f'{log_path}/eval.log', 'r') as f:
-        new = process_file(f.read())
-        with open(f'{log_path}/mbb_eval.log', 'w') as f2:
-            f2.write(new)
     plot_eval(f'{log_path}/eval.log')
     #plot_train(f'{log_path}/train.log')
 
