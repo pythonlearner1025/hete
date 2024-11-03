@@ -34,6 +34,8 @@ void get_state(
     int player
 );
 
+float sample_uniform(); 
+std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta); 
 std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits);
 
 template <typename T, std::size_t N>

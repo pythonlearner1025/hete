@@ -45,6 +45,12 @@ void update_tensors(
     }
 }
 
+float sample_uniform() {
+    thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    return dist(rng); // Thread-safe random float between 0 and 1
+}
+
 int sample_iter(size_t max_iter) {
     thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<int> dist(1, max_iter);
@@ -152,6 +158,19 @@ std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
         auto max_index = torch::argmax(relu_logits).item<int>();
         std::fill(strat.begin(), strat.end(), 0.0);
         strat[max_index] = 1.0;
+    }
+    return strat;
+}
+
+
+// Must return a probability distribution
+std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta) {
+    double logits_sum = logits.sum().item<double>() + beta;
+    std::array<double, NUM_ACTIONS> strat{};
+    auto strategy_tensor = (logits+beta) / logits_sum;
+    auto strat_data = strategy_tensor.data_ptr<float>();
+    for (int i = 0; i < NUM_ACTIONS; ++i) {
+        strat[i] = strat_data[i];
     }
     return strat;
 }
