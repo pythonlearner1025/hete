@@ -559,11 +559,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Slumbot API example')
     parser.add_argument('--username', type=str, default="")
     parser.add_argument('--password', type=str, default="")
-    parser.add_argument('--log_path', type=str)
+    parser.add_argument('--log_path', type=str, default=None)
     parser.add_argument('--num_hands', type=int, default=1000)
     parser.add_argument('--plot_all',type=int, default=1)
     parser.add_argument('--start_iter', type=int, default=1)
     parser.add_argument('--plot_intervals',type=int, default=1)
+    parser.add_argument('--auto', type=int, default=1)
     parser.add_argument('--write', type=int, default=1)
     args = parser.parse_args()
     username = args.username
@@ -573,14 +574,19 @@ if __name__ == '__main__':
     plot_all = args.plot_all
     start_iter = args.start_iter
     plot_intervals = args.plot_intervals
+    automatic = args.auto
     write = args.write
+
+    if not log_path:
+        log_path = os.path.join('./out',sorted(os.listdir('out'))[-1])
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
     NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
 
-    auto(log_path, start_iter, num_hands=num_hands)
-    exit(-1)
+    if automatic:
+        auto(log_path, start_iter, num_hands=num_hands)
+        exit(-1)
 
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
     total_iters = len(only_dirs) if plot_all else 1
