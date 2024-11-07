@@ -1,0 +1,21 @@
+{
+  "os": "macOS-14.4-arm64-arm-64bit",
+  "python": "3.12.2",
+  "startedAt": "2024-11-06T20:49:55.214868Z",
+  "args": [
+    "--num_hands",
+    "10"
+  ],
+  "program": "/Users/minjunes/hete/eval.py",
+  "codePath": "eval.py",
+  "git": {
+    "remote": "https://github.com/pythonlearner1025/hete",
+    "commit": "12000710468fc13b9c350661d92979a40a8c8f40"
+  },
+  "email": "mjsong2021@gmail.com",
+  "root": "/Users/minjunes/hete",
+  "host": "Minjunes-MBP-3.fios-router.home",
+  "username": "minjunes",
+  "executable": "/Users/minjunes/miniconda3/bin/python3",
+  "codePathLocal": "eval.py"
+}

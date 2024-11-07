@@ -1,0 +1,8 @@
+{"time":"2024-11-06T22:02:15.144113-05:00","level":"INFO","msg":"using version","core version":"0.18.6"}
+{"time":"2024-11-06T22:02:15.144149-05:00","level":"INFO","msg":"created symlink","path":"/Users/minjunes/hete/wandb/run-20241106_220215-ooddl1gi/logs/debug-core.log"}
+{"time":"2024-11-06T22:02:15.251092-05:00","level":"INFO","msg":"created new stream","id":"ooddl1gi"}
+{"time":"2024-11-06T22:02:15.251143-05:00","level":"INFO","msg":"stream: started","id":"ooddl1gi"}
+{"time":"2024-11-06T22:02:15.251155-05:00","level":"INFO","msg":"sender: started","stream_id":"ooddl1gi"}
+{"time":"2024-11-06T22:02:15.251187-05:00","level":"INFO","msg":"handler: started","stream_id":{"value":"ooddl1gi"}}
+{"time":"2024-11-06T22:02:15.251155-05:00","level":"INFO","msg":"writer: Do: started","stream_id":{"value":"ooddl1gi"}}
+{"time":"2024-11-06T22:02:15.659355-05:00","level":"INFO","msg":"Starting system monitor"}

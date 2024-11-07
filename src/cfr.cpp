@@ -28,9 +28,11 @@ torch::Device cpu_device(torch::kCPU);
 torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
 
+
 void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
     std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
     size_t current_total = total_advs[player].load();
+    cfr_iter_advs.fetch_add(1);
     
     if (current_total < MAX_SIZE) {
         global_player_advs[player][current_total] = adv;
@@ -51,6 +53,7 @@ struct Advantage {
     State state;
     int depth;
     int unprocessed_children;
+    double sampling_prob;
 
     Advantage(const Advantage&) = delete;
     Advantage& operator=(const Advantage&) = delete;
@@ -63,7 +66,8 @@ struct Advantage {
         int parent_action_ = -1,
         const State state_ = {},
         int depth_ = 0,
-        int unprocessed_children_ = 0
+        int unprocessed_children_ = 0,
+        double sampling_prob_ = 0
     ) :
         values(values_),
         strat(strat_),
@@ -72,7 +76,8 @@ struct Advantage {
         parent_action(parent_action_),
         state(state_),
         depth(depth),
-        unprocessed_children(unprocessed_children_)
+        unprocessed_children(unprocessed_children_),
+        sampling_prob(sampling_prob_)
     {
         if (values_.empty()) {
             values.fill(0.0);
@@ -135,241 +140,49 @@ std::string format_game_state(const State& state) {
     return ss.str();
 }
 
+std::string format_tensor(const torch::Tensor& tensor) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(4);
+    
+    // Handle 0-dim tensor
+    if (tensor.dim() == 0) {
+        ss << tensor.item<float>();
+        return ss.str();
+    }
+    
+    ss << "[";
+    
+    // Handle 1-dim tensor
+    if (tensor.dim() == 1) {
+        for (int64_t i = 0; i < tensor.size(0); i++) {
+            ss << tensor[i].item<float>();
+            if (i < tensor.size(0) - 1) ss << ", ";
+        }
+    }
+    // Handle 2-dim tensor 
+    else if (tensor.dim() == 2) {
+        for (int64_t i = 0; i < tensor.size(0); i++) {
+            ss << "[";
+            for (int64_t j = 0; j < tensor.size(1); j++) {
+                ss << tensor[i][j].item<float>();
+                if (j < tensor.size(1) - 1) ss << ", ";
+            }
+            ss << "]";
+            if (i < tensor.size(0) - 1) ss << ", ";
+        }
+    }
+    
+    ss << "]";
+    return ss.str();
+}
+
+
 double logarithmic_smoothing(double x_start, double x_end, int t, int max_steps) {
     // Prevent division by zero and log(0)
     t = std::max(1, std::min(t, max_steps));
     double decay = 1.0 - (std::log(static_cast<double>(t)) / std::log(static_cast<double>(max_steps)));
     double value = x_end + (x_start - x_end) * decay;
     return value;
-}
-
-// https://proceedings.neurips.cc/paper_files/paper/2012/file/3df1d4b96d8976ff5986393e8767f5b2-Paper.pdf
-void avg_sampling(
-    int thread_id,
-    int player,
-    std::array<std::string, NUM_PLAYERS> model_paths,
-    int t,
-    int traversals_per_thread,
-    const std::array<double, NUM_PLAYERS>& starting_stacks,
-    const std::array<double, NUM_PLAYERS>& antes,
-    int starting_actor,
-    double small_bet,
-    double big_bet,
-    std::string logfile
-) {
-    torch::NoGradGuard no_grad_guard;
-    std::mt19937 rng(std::random_device{}() + thread_id);  // Add thread_id to make seed unique per thread
-    PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
-
-    auto hands = init_batched_hands(1);
-    auto flops = init_batched_flops(1);
-    auto turns = init_batched_turns(1);
-    auto rivers = init_batched_rivers(1);
-    auto bet_fracs = init_batched_fracs(1);
-    auto bet_status = init_batched_status(1);
-
-    auto batched_hands = init_batched_hands(TRAVERSAL_BS);
-    auto batched_flops = init_batched_flops(TRAVERSAL_BS);
-    auto batched_turns = init_batched_turns(TRAVERSAL_BS);
-    auto batched_rivers = init_batched_rivers(TRAVERSAL_BS);
-    auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
-    auto batched_status = init_batched_status(TRAVERSAL_BS);
-
-    DeepCFRModel opp_net;
-    if (t>1) {
-        torch::load(opp_net, model_paths[get_opp(player)]);
-    }
-    opp_net->to(cpu_device);
-    opp_net->eval();
-
-    DeepCFRModel player_net;
-    if (t > 1) {
-        torch::load(player_net, model_paths[player]);
-    }
-    player_net->to(gpu_device);
-    player_net->eval();
-
-    for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
-        int n_total_advs = total_advs[player].load();
-        int n_cfr_advs = cfr_iter_advs.load();
-        if (traversal % 100 == 0) {
-            DEBUG_NONE("Thread=" << thread_id
-               << " Iter=" << traversal
-               << " Cfr_iter_advs=" << format_scientific(n_cfr_advs));
-        }
-        // Reset manipulators to default formatting if needed
-        std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int, float>> stack;
-        std::stack<std::shared_ptr<Advantage>> terminal_advs;
-        std::deque<std::shared_ptr<Advantage>> all_advs;
-
-        stack.push({0, initial_engine, nullptr, -1, 1.0});
-
-        while (!stack.empty()) {
-            auto [depth, engine, parent_advantage, parent_action, sample_p] = stack.top();
-            stack.pop();
-
-            if (!engine.get_game_status() || !engine.is_playing(player)) {
-                std::array<double, NUM_PLAYERS> payoff = engine.get_payoffs();
-                double bb = engine.get_big_blind();
-                double final_value = payoff[player] / bb;
-
-                DEBUG_WRITE(logfile, "TERMINAL NODE:"
-                << "\n  Depth: " << depth
-                << "\n  Final Value: " << final_value);
-
-                if (parent_advantage != nullptr) {
-                    parent_advantage->values[parent_action] = final_value;
-                    parent_advantage->unprocessed_children--;
-                    if (parent_advantage->unprocessed_children == 0) {
-                        terminal_advs.push(parent_advantage);
-                    }
-                }
-            }
-            else if (engine.turn() == player) {
-                auto state = std::make_shared<State>();
-                get_state(engine, state.get(), player);
-                update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
-                
-                DEBUG_WRITE(logfile, "PLAYER NODE:"
-                << "\n  Depth: " << depth
-                << "\n  Game State: " << format_game_state(*state)
-                << "\n  Reach Prob: " << sample_p);
-
-                std::array<bool, NUM_ACTIONS> is_illegal{false};
-                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                    if (!verify_action(&engine, player, a)) is_illegal[a] = true;
-                }
-
-                torch::Tensor regrets = player_net->forward(
-                    hands, 
-                    flops, 
-                    turns, 
-                    rivers, 
-                    bet_fracs, 
-                    bet_status
-                );
-
-                //std::array<double, NUM_ACTIONS> probs = sample_prob(regrets, BETA);
-                std::array<double, NUM_ACTIONS> strat = regret_match(regrets);
-
-                DEBUG_WRITE(logfile, "  Strategy: " << format_array(strat));
-
-                auto adv_ptr = std::make_shared<Advantage>(
-                    std::array<double, NUM_ACTIONS>{},
-                    strat,
-                    is_illegal,
-                    parent_advantage,
-                    parent_action,
-                    *state
-                );
-
-                adv_ptr->depth = depth;
-                all_advs.push_back(adv_ptr);
-                double EPSILON = logarithmic_smoothing(EPSILON_START, EPSILON_END, t, static_cast<int>(CFR_ITERS));
-
-                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                    float r = sample_uniform(); 
-                    float p = std::max(EPSILON, static_cast<double>(strat[a]));
-                    if (!is_illegal[a] && r < p) {
-                        PokerEngine new_engine = engine.copy();
-                        take_action(&new_engine, player, a);
-                        float act_sample_p = std::min(static_cast<double>(p), 1.0);
-                        stack.push({
-                            depth + 1, 
-                            new_engine, 
-                            adv_ptr, 
-                            static_cast<int>(a), 
-                            act_sample_p
-                        });
-                        adv_ptr->unprocessed_children++;
-                        DEBUG_WRITE(logfile, "  Chosen Action: " << a 
-                        << "\n  Action Prob: " << act_sample_p);
-                    }
-                }
-            }
-            else {
-                // opponent case
-                int actor = engine.turn();
-                auto state = std::make_shared<State>();
-                get_state(engine, state.get(), player);
-                update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
-
-                DEBUG_WRITE(logfile, "OPPONENT NODE:"
-                << "\n  Depth: " << depth
-                << "\n  Game State: " << format_game_state(*state));
-
-                if (opp_net.get() == nullptr) {
-                    throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
-                }
-                torch::Tensor regrets = opp_net->forward(
-                    hands, 
-                    flops, 
-                    turns, 
-                    rivers, 
-                    bet_fracs, 
-                    bet_status
-                );
-                std::array<double, NUM_ACTIONS> strat = regret_match(regrets);
-
-                int action_index = sample_action(strat);
-                while (!verify_action(&engine, actor, action_index)) {
-                    action_index = (action_index - 1 + NUM_ACTIONS) % NUM_ACTIONS;
-                }
-                take_action(&engine, actor, action_index);
-                stack.push({depth + 1, std::move(engine), parent_advantage, parent_action, sample_p});
-            }
-        }
-
-        DEBUG_WRITE(logfile, " N_TERMINAL_ADVS: " << terminal_advs.size());
-
-        while (!terminal_advs.empty()) {
-            auto terminal_adv = terminal_advs.top();
-            terminal_advs.pop();
-
-            // Backpropagate to parent
-            if (auto parent_adv_ptr = terminal_adv->parent.lock()) {
-                if (parent_adv_ptr == nullptr || parent_adv_ptr == terminal_adv) {
-                    //DEBUG_WRITE(logfile, "  WARNING: Parent pointer is null or cyclic");
-                    continue;
-                }
-
-                // ev of the terminal node
-                double ev = 0.0;
-                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                    if (!terminal_adv->is_illegal[a]) {
-                        ev += terminal_adv->values[a] * parent_adv_ptr->strat[a];
-                    }
-                }
-
-                // Calculate advantages
-                std::array<double, NUM_ACTIONS> adv_values;
-                for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                    if (!terminal_adv->is_illegal[a]) {
-                        double ad = terminal_adv->values[a] - ev;
-                        adv_values[a] = (ad > 0.0) ? ad : (1.0 / static_cast<double>(NUM_ACTIONS));
-                    } else {
-                        adv_values[a] = 0.0;
-                    }
-                }
-
-                safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values}, rng);
-                cfr_iter_advs.fetch_add(1);
-
-                DEBUG_WRITE(logfile, "PROCESSING TERMINAL ADVANTAGE:"
-                << "\n  Depth: " << terminal_adv->depth
-                << "\n  Unprocessed Children: " << terminal_adv->unprocessed_children
-                << "\n  Values: " << format_array(terminal_adv->values)
-                << "\n  Calculated EV: " << ev);
-                // value of node = reach prob of node * ev of node
-                parent_adv_ptr->values[terminal_adv->parent_action] = ev;
-                parent_adv_ptr->unprocessed_children--;
-
-                if (parent_adv_ptr->unprocessed_children == 0) {
-                    terminal_advs.push(parent_adv_ptr);
-                }
-            }
-        }
-    }
 }
 
 void init_constants_log(std::string constant_log_file) {
@@ -381,6 +194,204 @@ void init_constants_log(std::string constant_log_file) {
         std::cerr << "Failed to open constants.h or constants log file." << std::endl;
     }
 }
+
+void outcome_sampling(
+    int thread_id,
+    int player, 
+    std::filesystem::path model_path, 
+    int cfr_iter, 
+    int traversals,
+    std::array<double, NUM_PLAYERS> starting_stacks, 
+    std::array<double, NUM_PLAYERS> antes,
+    int starting_actor,
+    double small_bet, 
+    double big_bet,
+    std::string logfile
+) {
+    // Initialize RNG
+    std::mt19937 rng(std::random_device{}());
+    torch::Tensor hand = init_batched_hands(1);
+    torch::Tensor flop = init_batched_flops(1);
+    torch::Tensor turn = init_batched_turns(1);
+    torch::Tensor river = init_batched_rivers(1);
+    torch::Tensor bet_fracs = init_batched_fracs(1);
+    torch::Tensor bet_status = init_batched_status(1);
+
+    std::map<std::tuple<int, int>, DeepCFRModel> cache;
+    // For each traversal
+    for (int t = 0; t < traversals; ++t) {
+        if (t % 100 == 0) {
+            DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal= "<<t<<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
+        }
+        // Initialize models for each player
+        std::array<DeepCFRModel, NUM_PLAYERS> models;
+        if (cfr_iter>1) {
+            int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
+            for (int p = 0; p < NUM_PLAYERS; ++p) {
+                auto key = std::tuple(p, sampled_iter);
+                if (cache.find(key) == cache.end()) {
+                    // Load the model from the path
+                    auto path = model_path / std::to_string(sampled_iter) / std::to_string(p) / "model.pt";
+                    models[p] = DeepCFRModel();
+                    torch::load(models[p], path);
+                    models[p]->to(cpu_device);
+                    models[p]->eval();
+                } else {
+                    models[p] = cache[key]; 
+                }
+            }
+        } 
+        // Initialize the game
+        PokerEngine engine(
+            starting_stacks,
+            antes,
+            starting_actor,
+            small_bet,
+            big_bet,
+            false // manual mode
+        );
+
+        // Recursive CFR function
+        std::function<double(PokerEngine&, int, int, double, double, double, int)> cfr;
+        cfr = [&](PokerEngine& engine, int traversing_player, int current_player, double pi_sigma_i, double pi_sigma_minus_i, double pi_sigma_prime, int depth) -> double {
+            // Base case: if terminal node
+            if (!engine.get_game_status()) {
+                // Game is over
+                auto payoffs = engine.get_payoffs();
+                double u_i = payoffs[traversing_player];
+                return u_i;
+            }
+
+            // If current player is the traversing player
+            if (current_player == traversing_player) {
+                // Get the information set (state)
+                State state;
+                get_state(engine, &state, traversing_player);
+                if (t % 100 == 0) {
+                    DEBUG_WRITE(logfile, "PLAYER TURN\n" << format_game_state(state));
+                }
+
+                // Get the model for traversing player
+                auto model = models[traversing_player];
+
+                // Prepare tensors for input
+                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+
+                // Get the model output
+                auto logits = model->forward(hand, flop, turn, river, bet_fracs, bet_status);
+                if (t % 100 == 0) {
+                    DEBUG_WRITE(logfile, "logits=" << format_tensor(logits));
+                }
+
+                // Convert logits to strategy using regret matching
+                std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
+
+                if (t % 100 == 0) {
+                    DEBUG_WRITE(logfile,"strategy="<<format_array(strategy));
+                }
+
+                // Ensure minimum exploration probability epsilon
+                std::array<double, NUM_ACTIONS> sampling_strategy;
+                for (int a = 0; a < NUM_ACTIONS; ++a) {
+                    sampling_strategy[a] = (1.0 - EPSILON) * strategy[a] + EPSILON / NUM_ACTIONS;
+                }
+
+                // Normalize sampling strategy
+                sampling_strategy = normalize_to_prob_dist(sampling_strategy);
+
+                // Sample an action according to the sampling strategy
+                int action = sample_action(sampling_strategy);
+
+                // Compute the sampling probability for the action
+                double sigma_prime = sampling_strategy[action];
+
+                // Update the sampling probability
+                double new_pi_sigma_prime = pi_sigma_prime * sigma_prime;
+
+                // Compute traversing player's reach probability under sigma
+                double sigma_i = strategy[action];
+                double new_pi_sigma_i = pi_sigma_i * sigma_i;
+
+                // Take the action in the engine
+                take_action(&engine, current_player, action);
+
+                // Get next player
+                int next_player = engine.turn();
+
+                // Recurse
+                double u = cfr(engine, traversing_player, next_player, new_pi_sigma_i, pi_sigma_minus_i, new_pi_sigma_prime, depth + 1);
+
+                // Compute the weighting factor w_I
+                double w_I = u * (pi_sigma_i / pi_sigma_prime);
+
+                // Compute the regrets for each action
+                auto cum_regrets = 0.0;
+                std::array<double, NUM_ACTIONS> regrets;
+                for (int a = 0; a < NUM_ACTIONS; ++a) {
+                    if (a == action) {
+                        regrets[a] = w_I * (1.0 - strategy[a]);
+                    } else {
+                        regrets[a] = -w_I * strategy[a];
+                    }
+                    cum_regrets += std::abs(regrets[a]);
+                }
+
+                if (cum_regrets >= 1e-3) {
+                    // Store the regrets (advantages) in the buffer
+                    TraverseAdvantage adv;
+                    adv.state = state;
+                    adv.advantages = regrets;
+                    adv.iteration = cfr_iter;
+                    if (t % 100 == 0) {
+                        DEBUG_WRITE(logfile, "advantages="<<format_array(regrets));
+                    }
+                    safe_add_advantage(traversing_player, adv, rng);
+                }
+                return u;
+            } else {
+                // Opponent's turn
+                // Get the model for opponent
+                auto model = models[current_player];
+
+                // Get the information set (state)
+                State state;
+                get_state(engine, &state, current_player);
+
+                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+
+                // Get the model output
+                auto logits = model->forward(hand, flop, turn, river, bet_fracs, bet_status);
+
+                // Convert logits to strategy using regret matching
+                std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
+
+                // Sample an action according to the strategy
+                int action = sample_action(strategy);
+
+                // Compute sigma(a|I)
+                double sigma = strategy[action];
+
+                // Update the reach probabilities
+                double new_pi_sigma_minus_i = pi_sigma_minus_i * sigma;
+
+                // Take the action in the engine
+                take_action(&engine, current_player, action);
+
+                // Get next player
+                int next_player = engine.turn();
+
+                // Recurse
+                double u = cfr(engine, traversing_player, next_player, pi_sigma_i, new_pi_sigma_minus_i, pi_sigma_prime, depth + 1);
+
+                return u;
+            }
+        };
+
+        // Start traversal
+        double u = cfr(engine, player, engine.turn(), 1.0, 1.0, 1.0, 0);
+    }
+}
+
 
 int main() {
     auto now = std::chrono::system_clock::now();
@@ -413,12 +424,12 @@ int main() {
     double big_bet = 1.0;
     int starting_actor = 0;
 
-    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<std::string, NUM_PLAYERS> model_paths) {
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter) {
         try {
-            avg_sampling(
+            outcome_sampling(
                 thread_id,
                 player, 
-                model_paths, 
+                current_path, 
                 cfr_iter, 
                 traversals_per_thread,
                 starting_stacks, 
@@ -447,22 +458,6 @@ int main() {
     auto batched_iters_a = batched_iters.accessor<int, 2>();
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
-        // init models
-        std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
-        std::array<std::string, NUM_PLAYERS> model_paths{"null"};
-        // load and assign models
-        for (int player=0; player<NUM_PLAYERS; ++player) {
-            if (cfr_iter > 1) {
-                // Then load the new model and set the references
-                int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
-                std::filesystem::path iter_model_path = current_path;
-                iter_model_path /= std::to_string(sampled_iter);
-                iter_model_path /= std::to_string(player);
-                iter_model_path /= "model.pt";
-                std::string path_str = iter_model_path.string(); 
-                model_paths[player] = path_str; 
-            } 
-        }
 
         for (int player=0; player<NUM_PLAYERS; ++player) {
             // init threads
@@ -473,8 +468,8 @@ int main() {
                 DEBUG_NONE("spawning thread");
                 // Capture thread_nets by reference
                 threads.emplace_back(
-                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, model_paths]() {
-                        thread_func(traversals_to_run, thread_id, player, cfr_iter, model_paths);
+                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter]() {
+                        thread_func(traversals_to_run, thread_id, player, cfr_iter);
                     }
                 );
             } 
@@ -496,33 +491,35 @@ int main() {
             DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
-            std::uniform_real_distribution<double> dist(0.0, 1.0);
             size_t train_bs = std::min(TRAIN_BS, cfr_iter_advs.load());
             if (train_bs == 0) continue;
             cfr_iter_advs.store(0, std::memory_order_seq_cst);
             size_t total_advs_player = total_advs[player].load();
-            const size_t POOL_SIZE = std::min(train_bs * 4, total_advs_player);
-            std::vector<size_t> pool(POOL_SIZE);
-            std::iota(pool.begin(), pool.end(), 0);
-            std::shuffle(pool.begin(), pool.end(), rng);
-            size_t window_start = 0;
+            if (total_advs_player == 0) continue;
+
+            // Build weights vector
+            std::vector<double> weights(total_advs_player);
+            for (size_t i = 0; i < total_advs_player; ++i) {
+                weights[i] = static_cast<double>(global_player_advs[player][i].iteration);
+            }
+
+            // Create discrete distribution for weighted sampling
+            std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
+
             torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
 
             size_t train_iters = std::min(TRAIN_ITERS, static_cast<size_t>(total_advs_player / TRAIN_BS * TRAIN_EPOCHS));
+
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             DEBUG_NONE("TRAIN_ITERS = " << train_iters);
             DEBUG_WRITE(logfile, "TRAIN_ITERS = " << train_iters);
 
             for (size_t train_iter = 0; train_iter < train_iters; ++train_iter) {
                 // Rotate and shuffle window
-                std::rotate(pool.begin(), 
-                        pool.begin() + window_start, 
-                        pool.begin() + window_start + train_bs);
-                std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
-                window_start = (window_start + train_bs) % POOL_SIZE;
-
                 for (size_t i = 0; i < train_bs; ++i) {
-                    State S = global_player_advs[player][pool[i]].state;
+                    size_t idx = dist(rng);
+
+                    State S = global_player_advs[player][idx].state;
                     update_tensors(
                         S, 
                         batched_hands, 
@@ -535,11 +532,15 @@ int main() {
                     ); 
 
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs_a[i][a] = global_player_advs[player][pool[i]].advantages[a];
+                        batched_advs_a[i][a] = global_player_advs[player][idx].advantages[a];
                     }
-                    int iteration = global_player_advs[player][pool[i]].iteration;
+                    int iteration = global_player_advs[player][idx].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
+
+                auto batch_advantages = batched_advs.slice(0, 0, train_bs).to(gpu_device);
+
+                //auto transformed_advantages = batch_advantages.sign() * torch::log1p(batch_advantages.abs());
 
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs).to(gpu_device),
@@ -550,24 +551,22 @@ int main() {
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
 
-                auto loss = torch::nn::functional::mse_loss(
+                auto loss = torch::nn::functional::smooth_l1_loss(
                     pred, 
-                    batched_advs.slice(0, 0, train_bs).to(gpu_device),
-                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
+                    batch_advantages,
+                    torch::nn::functional::SmoothL1LossFuncOptions().reduction(torch::kMean)
                 );
 
-                loss *= batched_iters.slice(0, 0, train_bs).to(torch::kFloat32).to(gpu_device) / static_cast<float>(CFR_ITERS);
-                auto batch_mean_loss = loss.mean(1).mean();
-                batch_mean_loss.backward();
+                loss.backward();
                 torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
                 optimizer.step();
+                optimizer.zero_grad();
                 if (train_iter % 100 == 0) {
-                    DEBUG_NONE("ITER: " << train_iter << "/" << train_iters << " LOSS: " << batch_mean_loss.to(cpu_device).item());            
+                    DEBUG_NONE("ITER: " << train_iter << "/" << train_iters << " LOSS: " << loss.to(cpu_device).item());            
                 }
             }
 
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
-
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");

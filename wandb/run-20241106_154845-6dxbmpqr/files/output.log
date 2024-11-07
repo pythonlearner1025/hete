@@ -1,0 +1,238 @@
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': 'b200', 'client_pos': 0, 'hole_cards': ['9d', '3s'], 'board': [], 'token': 'c5c09350-8f71-44a9-9e26-c7a7c63db19f'}
+Action: b200
+Client hole cards: ['9d', '3s']
+Board: []
+{'st': 0, 'pos': 0, 'street_last_bet_to': 200, 'total_last_bet_to': 200, 'last_bet_size': 100, 'last_bettor': 1}
+Sending incremental action: f
+-----------------
+{'old_action': 'b200', 'action': 'b200f', 'client_pos': 0, 'hole_cards': ['9d', '3s'], 'board': [], 'bot_hole_cards': ['Kd', '7h'], 'winnings': -100, 'won_pot': -300, 'session_num_hands': 1, 'baseline_winnings': -300, 'session_total': -100, 'session_baseline_total': -300}
+Action: b200f
+Client hole cards: ['9d', '3s']
+Board: []
+Hand winnings: -100
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': '', 'client_pos': 1, 'hole_cards': ['Qh', '6h'], 'board': []}
+Action:
+Client pos: 1
+Client hole cards: ['Qh', '6h']
+Board: []
+{'st': 0, 'pos': 1, 'street_last_bet_to': 100, 'total_last_bet_to': 100, 'last_bet_size': 50, 'last_bettor': 0}
+min_bet_amt: 50
+betting
+raw client act: b140
+incr: 150
+bet_amt: 140.0
+post_bet_amt: 290
+Sending incremental action: b290
+-----------------
+{'old_action': '', 'action': 'b290c/k', 'client_pos': 1, 'hole_cards': ['Qh', '6h'], 'board': ['Jh', '4s', '4d']}
+Action: b290c/k
+Client pos: 1
+Client hole cards: ['Qh', '6h']
+Board: ['Jh', '4s', '4d']
+{'st': 1, 'pos': 1, 'street_last_bet_to': 0, 'total_last_bet_to': 290, 'last_bet_size': 0, 'last_bettor': -1}
+min_bet_amt: 0
+betting
+raw client act: b238
+incr: 150
+bet_amt: 238.0
+post_bet_amt: 388
+Sending incremental action: b388
+-----------------
+{'old_action': 'b290c/k', 'action': 'b290c/kb388f', 'client_pos': 1, 'hole_cards': ['Qh', '6h'], 'board': ['Jh', '4s', '4d'], 'bot_hole_cards': ['8s', '7h'], 'winnings': 290, 'won_pot': 968, 'session_num_hands': 2, 'baseline_winnings': 90, 'session_total': 190, 'session_baseline_total': -210}
+Action: b290c/kb388f
+Client pos: 1
+Client hole cards: ['Qh', '6h']
+Board: ['Jh', '4s', '4d']
+Hand winnings: 290
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': 'b200', 'client_pos': 0, 'hole_cards': ['2h', '2c'], 'board': []}
+Action: b200
+Client hole cards: ['2h', '2c']
+Board: []
+{'st': 0, 'pos': 0, 'street_last_bet_to': 200, 'total_last_bet_to': 200, 'last_bet_size': 100, 'last_bettor': 1}
+Sending incremental action: f
+-----------------
+{'old_action': 'b200', 'action': 'b200f', 'client_pos': 0, 'hole_cards': ['2h', '2c'], 'board': [], 'bot_hole_cards': ['Qh', '4d'], 'winnings': -100, 'won_pot': -300, 'session_num_hands': 3, 'baseline_winnings': -300, 'session_total': 90, 'session_baseline_total': -510}
+Action: b200f
+Client hole cards: ['2h', '2c']
+Board: []
+Hand winnings: -100
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': '', 'client_pos': 1, 'hole_cards': ['Qd', '2h'], 'board': []}
+Action:
+Client pos: 1
+Client hole cards: ['Qd', '2h']
+Board: []
+{'st': 0, 'pos': 1, 'street_last_bet_to': 100, 'total_last_bet_to': 100, 'last_bet_size': 50, 'last_bettor': 0}
+min_bet_amt: 50
+betting
+raw client act: b140
+incr: 150
+bet_amt: 140.0
+post_bet_amt: 290
+Sending incremental action: b290
+-----------------
+{'old_action': '', 'action': 'b290c/k', 'client_pos': 1, 'hole_cards': ['Qd', '2h'], 'board': ['Qh', '9c', '6c']}
+Action: b290c/k
+Client pos: 1
+Client hole cards: ['Qd', '2h']
+Board: ['Qh', '9c', '6c']
+{'st': 1, 'pos': 1, 'street_last_bet_to': 0, 'total_last_bet_to': 290, 'last_bet_size': 0, 'last_bettor': -1}
+min_bet_amt: 0
+betting
+raw client act: b238
+incr: 150
+bet_amt: 238.0
+post_bet_amt: 388
+Sending incremental action: b388
+-----------------
+{'old_action': 'b290c/k', 'action': 'b290c/kb388b1510', 'client_pos': 1, 'hole_cards': ['Qd', '2h'], 'board': ['Qh', '9c', '6c']}
+Action: b290c/kb388b1510
+Client pos: 1
+Client hole cards: ['Qd', '2h']
+Board: ['Qh', '9c', '6c']
+{'st': 1, 'pos': 1, 'street_last_bet_to': 1510, 'total_last_bet_to': 1800, 'last_bet_size': 1122, 'last_bettor': 0}
+min_bet_amt: 1272.0
+Sending incremental action: f
+-----------------
+{'old_action': 'b290c/kb388b1510', 'action': 'b290c/kb388b1510f', 'client_pos': 1, 'hole_cards': ['Qd', '2h'], 'board': ['Qh', '9c', '6c'], 'bot_hole_cards': ['Ac', '6d'], 'winnings': -678, 'won_pot': -2478, 'session_num_hands': 4, 'baseline_winnings': -278, 'session_total': -588, 'session_baseline_total': -788}
+Action: b290c/kb388b1510f
+Client pos: 1
+Client hole cards: ['Qd', '2h']
+Board: ['Qh', '9c', '6c']
+Hand winnings: -678
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': 'b200', 'client_pos': 0, 'hole_cards': ['Kh', '7s'], 'board': []}
+Action: b200
+Client hole cards: ['Kh', '7s']
+Board: []
+{'st': 0, 'pos': 0, 'street_last_bet_to': 200, 'total_last_bet_to': 200, 'last_bet_size': 100, 'last_bettor': 1}
+Sending incremental action: f
+-----------------
+{'old_action': 'b200', 'action': 'b200f', 'client_pos': 0, 'hole_cards': ['Kh', '7s'], 'board': [], 'bot_hole_cards': ['5c', '3h'], 'winnings': -100, 'won_pot': -300, 'session_num_hands': 5, 'baseline_winnings': 100, 'session_total': -688, 'session_baseline_total': -688}
+Action: b200f
+Client hole cards: ['Kh', '7s']
+Board: []
+Hand winnings: -100
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': '', 'client_pos': 1, 'hole_cards': ['Ah', 'Qd'], 'board': []}
+Action:
+Client pos: 1
+Client hole cards: ['Ah', 'Qd']
+Board: []
+{'st': 0, 'pos': 1, 'street_last_bet_to': 100, 'total_last_bet_to': 100, 'last_bet_size': 50, 'last_bettor': 0}
+min_bet_amt: 50
+betting
+raw client act: b140
+incr: 150
+bet_amt: 140.0
+post_bet_amt: 290
+Sending incremental action: b290
+-----------------
+{'old_action': '', 'action': 'b290c/k', 'client_pos': 1, 'hole_cards': ['Ah', 'Qd'], 'board': ['Ks', 'Qs', '6h']}
+Action: b290c/k
+Client pos: 1
+Client hole cards: ['Ah', 'Qd']
+Board: ['Ks', 'Qs', '6h']
+{'st': 1, 'pos': 1, 'street_last_bet_to': 0, 'total_last_bet_to': 290, 'last_bet_size': 0, 'last_bettor': -1}
+min_bet_amt: 0
+betting
+raw client act: b238
+incr: 150
+bet_amt: 238.0
+post_bet_amt: 388
+Sending incremental action: b388
+-----------------
+{'old_action': 'b290c/k', 'action': 'b290c/kb388f', 'client_pos': 1, 'hole_cards': ['Ah', 'Qd'], 'board': ['Ks', 'Qs', '6h'], 'bot_hole_cards': ['Ts', '7h'], 'winnings': 290, 'won_pot': 968, 'session_num_hands': 6, 'baseline_winnings': 690, 'session_total': -398, 'session_baseline_total': 2}
+Action: b290c/kb388f
+Client pos: 1
+Client hole cards: ['Ah', 'Qd']
+Board: ['Ks', 'Qs', '6h']
+Hand winnings: 290
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': 'b200', 'client_pos': 0, 'hole_cards': ['Th', '7d'], 'board': []}
+Action: b200
+Client hole cards: ['Th', '7d']
+Board: []
+{'st': 0, 'pos': 0, 'street_last_bet_to': 200, 'total_last_bet_to': 200, 'last_bet_size': 100, 'last_bettor': 1}
+Sending incremental action: f
+-----------------
+{'old_action': 'b200', 'action': 'b200f', 'client_pos': 0, 'hole_cards': ['Th', '7d'], 'board': [], 'bot_hole_cards': ['9c', '6h'], 'winnings': -100, 'won_pot': -300, 'session_num_hands': 7, 'baseline_winnings': -2500, 'session_total': -498, 'session_baseline_total': -2498}
+Action: b200f
+Client hole cards: ['Th', '7d']
+Board: []
+Hand winnings: -100
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': '', 'client_pos': 1, 'hole_cards': ['3c', '2d'], 'board': []}
+Action:
+Client pos: 1
+Client hole cards: ['3c', '2d']
+Board: []
+{'st': 0, 'pos': 1, 'street_last_bet_to': 100, 'total_last_bet_to': 100, 'last_bet_size': 50, 'last_bettor': 0}
+min_bet_amt: 50
+betting
+raw client act: b140
+incr: 150
+bet_amt: 140.0
+post_bet_amt: 290
+Sending incremental action: b290
+-----------------
+{'old_action': '', 'action': 'b290f', 'client_pos': 1, 'hole_cards': ['3c', '2d'], 'board': [], 'bot_hole_cards': ['9s', '2h'], 'winnings': 100, 'won_pot': 390, 'session_num_hands': 8, 'baseline_winnings': 150, 'session_total': -398, 'session_baseline_total': -2348}
+Action: b290f
+Client pos: 1
+Client hole cards: ['3c', '2d']
+Board: []
+Hand winnings: 100
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': 'f', 'client_pos': 0, 'hole_cards': ['Qh', '7h'], 'board': [], 'bot_hole_cards': ['3d', '2h'], 'winnings': 50, 'won_pot': 150, 'session_num_hands': 9, 'baseline_winnings': 0, 'session_total': -348, 'session_baseline_total': -2348}
+Action: f
+Client hole cards: ['Qh', '7h']
+Board: []
+Hand winnings: 50
+Token: c5c09350-8f71-44a9-9e26-c7a7c63db19f
+-----------------
+{'old_action': '', 'action': '', 'client_pos': 1, 'hole_cards': ['6d', '3h'], 'board': []}
+Action:
+Client pos: 1
+Client hole cards: ['6d', '3h']
+Board: []
+{'st': 0, 'pos': 1, 'street_last_bet_to': 100, 'total_last_bet_to': 100, 'last_bet_size': 50, 'last_bettor': 0}
+min_bet_amt: 50
+betting
+raw client act: b140
+incr: 150
+bet_amt: 140.0
+post_bet_amt: 290
+Sending incremental action: b290
+-----------------
+{'old_action': '', 'action': 'b290c/k', 'client_pos': 1, 'hole_cards': ['6d', '3h'], 'board': ['Ks', '6h', '4d']}
+Action: b290c/k
+Client pos: 1
+Client hole cards: ['6d', '3h']
+Board: ['Ks', '6h', '4d']
+{'st': 1, 'pos': 1, 'street_last_bet_to': 0, 'total_last_bet_to': 290, 'last_bet_size': 0, 'last_bettor': -1}
+min_bet_amt: 0
+betting
+raw client act: b238
+incr: 150
+bet_amt: 238.0
+post_bet_amt: 388
+Sending incremental action: b388
+-----------------
+{'old_action': 'b290c/k', 'action': 'b290c/kb388f', 'client_pos': 1, 'hole_cards': ['6d', '3h'], 'board': ['Ks', '6h', '4d'], 'bot_hole_cards': ['Js', '8c'], 'winnings': 290, 'won_pot': 968, 'session_num_hands': 10, 'baseline_winnings': 90, 'session_total': -58, 'session_baseline_total': -2258}
+Action: b290c/kb388f
+Client pos: 1
+Client hole cards: ['6d', '3h']
+Board: ['Ks', '6h', '4d']
+Hand winnings: 290

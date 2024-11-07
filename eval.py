@@ -4,6 +4,7 @@ import requests
 import sys
 import argparse
 import os
+import wandb
 
 host = 'slumbot.com'
 
@@ -264,7 +265,7 @@ def regret_match(logits):
 
 def read_config(file_path):
     config = {}
-    target_vars = ['NUM_PLAYERS', 'MODEL_DIM', 'NUM_ACTIONS', 'MAX_ROUND_BETS']
+    target_vars = ['NUM_PLAYERS', 'MODEL_DIM', 'NUM_ACTIONS', 'MAX_ROUND_BETS', 'NUM_TRAVERSALS', 'CFR_ITERS', 'TRAIN_BS', 'TRAIN_ITERS']
     
     with open(file_path, 'r') as file:
         for line in file:
@@ -277,10 +278,7 @@ def read_config(file_path):
                     config[var] = int(value)
                     break
     
-    return (config.get('NUM_PLAYERS'),
-            config.get('MODEL_DIM'),
-            config.get('NUM_ACTIONS'),
-            config.get('MAX_ROUND_BETS'))
+    return {target_var:config.get(target_var) for target_var in target_vars}
 
 
 
@@ -497,9 +495,17 @@ def Login(username, password):
         sys.exit(-1)
     return token
 
-def auto(log_path, start_iter, num_hands=10):
+def auto(log_path, start_iter, num_hands=10, use_wandb=True, config={}, run_name=""):
     import time
     eval_cfr_iter = start_iter
+    if use_wandb:
+        print("initializing wandb")
+        wandb.init(
+            project = "poker ai",
+            config={**config},
+            name=run_name
+        )
+
     while 1:
         both_player_exists = True
         for i in range(NUM_PLAYERS):
@@ -538,6 +544,9 @@ def auto(log_path, start_iter, num_hands=10):
                 'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
             }
 
+            if use_wandb:
+                wandb.log(eval_results)
+
             with open(f'{log_path}/eval.log', 'a') as f:
                 for key, value in eval_results.items():
                     log_line = f'{key} = {value}\n'
@@ -550,6 +559,8 @@ def auto(log_path, start_iter, num_hands=10):
         else:
             time.sleep(10)
             print('sleeping 10 seconds...')
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':
@@ -566,6 +577,8 @@ if __name__ == '__main__':
     parser.add_argument('--plot_intervals',type=int, default=1)
     parser.add_argument('--auto', type=int, default=1)
     parser.add_argument('--write', type=int, default=1)
+    parser.add_argument('--wandb', type=int, default=1)
+    parser.add_argument('--name', type=str, default="")
     args = parser.parse_args()
     username = args.username
     password = args.password
@@ -576,16 +589,19 @@ if __name__ == '__main__':
     plot_intervals = args.plot_intervals
     automatic = args.auto
     write = args.write
+    use_wandb = args.wandb
+    run_name = args.name
 
     if not log_path:
         log_path = os.path.join('./out',sorted(os.listdir('out'))[-1])
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
-    NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
+    config = read_config(FILE_PATH)
+    NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS, _, _, _, _ = tuple(config.values())
 
     if automatic:
-        auto(log_path, start_iter, num_hands=num_hands)
+        auto(log_path, start_iter, num_hands=num_hands, use_wandb=use_wandb, config=config, run_name=run_name)
         exit(-1)
 
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']

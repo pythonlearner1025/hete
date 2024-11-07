@@ -1,0 +1,8 @@
+{"time":"2024-11-06T22:00:44.083996-05:00","level":"INFO","msg":"using version","core version":"0.18.6"}
+{"time":"2024-11-06T22:00:44.084055-05:00","level":"INFO","msg":"created symlink","path":"/Users/minjunes/hete/wandb/run-20241106_220044-8vz3foep/logs/debug-core.log"}
+{"time":"2024-11-06T22:00:44.194144-05:00","level":"INFO","msg":"created new stream","id":"8vz3foep"}
+{"time":"2024-11-06T22:00:44.19419-05:00","level":"INFO","msg":"stream: started","id":"8vz3foep"}
+{"time":"2024-11-06T22:00:44.194363-05:00","level":"INFO","msg":"sender: started","stream_id":"8vz3foep"}
+{"time":"2024-11-06T22:00:44.194314-05:00","level":"INFO","msg":"writer: Do: started","stream_id":{"value":"8vz3foep"}}
+{"time":"2024-11-06T22:00:44.194493-05:00","level":"INFO","msg":"handler: started","stream_id":{"value":"8vz3foep"}}
+{"time":"2024-11-06T22:00:44.36399-05:00","level":"INFO","msg":"Starting system monitor"}

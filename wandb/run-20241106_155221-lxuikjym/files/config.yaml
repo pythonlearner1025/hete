@@ -1,0 +1,36 @@
+_wandb:
+    value:
+        cli_version: 0.18.6
+        m: []
+        python_version: 3.12.2
+        t:
+            "1":
+                - 55
+            "2":
+                - 55
+            "3":
+                - 16
+                - 23
+                - 55
+            "4": 3.12.2
+            "5": 0.18.6
+            "8":
+                - 5
+            "12": 0.18.6
+            "13": darwin-arm64
+CFR_ITERS:
+    value: 100
+MAX_ROUND_BETS:
+    value: 6
+MODEL_DIM:
+    value: 256
+NUM_ACTIONS:
+    value: 10
+NUM_PLAYERS:
+    value: 2
+NUM_TRAVERSALS:
+    value: 16000
+TRAIN_BS:
+    value: 1024
+TRAIN_ITERS:
+    value: 8000

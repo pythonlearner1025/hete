@@ -1,0 +1,17 @@
+{"time":"2024-11-06T15:48:45.753795-05:00","level":"INFO","msg":"using version","core version":"0.18.6"}
+{"time":"2024-11-06T15:48:45.75382-05:00","level":"INFO","msg":"created symlink","path":"/Users/minjunes/hete/wandb/run-20241106_154845-6dxbmpqr/logs/debug-core.log"}
+{"time":"2024-11-06T15:48:46.065324-05:00","level":"INFO","msg":"created new stream","id":"6dxbmpqr"}
+{"time":"2024-11-06T15:48:46.06536-05:00","level":"INFO","msg":"stream: started","id":"6dxbmpqr"}
+{"time":"2024-11-06T15:48:46.065372-05:00","level":"INFO","msg":"writer: Do: started","stream_id":{"value":"6dxbmpqr"}}
+{"time":"2024-11-06T15:48:46.06538-05:00","level":"INFO","msg":"handler: started","stream_id":{"value":"6dxbmpqr"}}
+{"time":"2024-11-06T15:48:46.065461-05:00","level":"INFO","msg":"sender: started","stream_id":"6dxbmpqr"}
+{"time":"2024-11-06T15:48:46.297498-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2024-11-06T15:48:47.608485-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2024-11-06T15:48:47.608866-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2024-11-06T15:48:48.61374-05:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"saving job artifact","runtime_seconds":0.772526959}],"total_operations":1}}
+{"time":"2024-11-06T15:48:48.97093-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2024-11-06T15:48:50.140341-05:00","level":"INFO","msg":"stream: closing","id":"6dxbmpqr"}
+{"time":"2024-11-06T15:48:50.140353-05:00","level":"INFO","msg":"handler: closed","stream_id":{"value":"6dxbmpqr"}}
+{"time":"2024-11-06T15:48:50.140365-05:00","level":"INFO","msg":"sender: closed","stream_id":"6dxbmpqr"}
+{"time":"2024-11-06T15:48:50.140366-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":{"value":"6dxbmpqr"}}
+{"time":"2024-11-06T15:48:50.140503-05:00","level":"INFO","msg":"stream: closed","id":"6dxbmpqr"}
