@@ -20,7 +20,6 @@
 #include "model.h"
 #include <unordered_map>
 
-
 // ========================
 // CardEmbedding Module
 // ========================
