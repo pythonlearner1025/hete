@@ -10,38 +10,60 @@ void update_tensors(
     torch::Tensor bet_status,
     int batch 
 ) {
-    // Get accessors
-    auto hand_a = hand.accessor<int32_t, 2>();
-    auto flop_a = flop.accessor<int32_t, 2>();
-    auto turn_a = turn.accessor<int32_t, 2>();
-    auto river_a = river.accessor<int32_t, 2>();
-    auto bet_fracs_a = bet_fracs.accessor<float, 2>();
-    auto bet_status_a = bet_status.accessor<float, 2>();
+    // Create CPU tensors to stage the data
+    auto hand_cpu = torch::empty({1, 2}, torch::kInt32);
+    auto flop_cpu = torch::empty({1, 3}, torch::kInt32);
+    auto turn_cpu = torch::empty({1, 1}, torch::kInt32);
+    auto river_cpu = torch::empty({1, 1}, torch::kInt32);
+    auto bet_fracs_cpu = torch::empty({1, NUM_PLAYERS*MAX_ROUND_BETS*4}, torch::kFloat32);
+    auto bet_status_cpu = torch::empty({1, NUM_PLAYERS*MAX_ROUND_BETS*4}, torch::kFloat32);
 
-    // Update hand cards (first two cards)
+    // Fill CPU tensors using accessors
+    auto hand_a = hand_cpu.accessor<int32_t, 2>();
+    auto flop_a = flop_cpu.accessor<int32_t, 2>();
+    auto turn_a = turn_cpu.accessor<int32_t, 2>();
+    auto river_a = river_cpu.accessor<int32_t, 2>();
+    auto bet_fracs_a = bet_fracs_cpu.accessor<float, 2>();
+    auto bet_status_a = bet_status_cpu.accessor<float, 2>();
+
+    // Update hand cards
     for (int i = 0; i < 2; ++i) {
-        hand_a[batch][i] = S.hand[i];
+        hand_a[0][i] = S.hand[i];
     }
 
-    // Update flop cards (next three cards)
+    // Update flop cards
     for (int i = 0; i < 3; ++i) {
-        flop_a[batch][i] = S.flop[i];
+        flop_a[0][i] = S.flop[i];
     }
 
     // Update turn card
-    turn_a[batch][0] = S.turn[0];
+    turn_a[0][0] = S.turn[0];
 
     // Update river card
-    river_a[batch][0] = S.river[0];
+    river_a[0][0] = S.river[0];
 
     // Update bet fractions
     for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_a[batch][i] = S.bet_fracs[i];
+        bet_fracs_a[0][i] = S.bet_fracs[i];
+        bet_status_a[0][i] = S.bet_status[i];
     }
 
-    // Update bet status
-    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_status_a[batch][i] = S.bet_status[i];
+    // Copy to GPU if needed, then copy to the correct batch index
+    if (hand.device().is_cuda()) {
+        hand.index_put_({batch}, hand_cpu.to(hand.device()));
+        flop.index_put_({batch}, flop_cpu.to(flop.device()));
+        turn.index_put_({batch}, turn_cpu.to(turn.device()));
+        river.index_put_({batch}, river_cpu.to(river.device()));
+        bet_fracs.index_put_({batch}, bet_fracs_cpu.to(bet_fracs.device()));
+        bet_status.index_put_({batch}, bet_status_cpu.to(bet_status.device()));
+    } else {
+        // If on CPU, copy directly
+        hand.index_put_({batch}, hand_cpu);
+        flop.index_put_({batch}, flop_cpu);
+        turn.index_put_({batch}, turn_cpu);
+        river.index_put_({batch}, river_cpu);
+        bet_fracs.index_put_({batch}, bet_fracs_cpu);
+        bet_status.index_put_({batch}, bet_status_cpu);
     }
 }
 
@@ -52,11 +74,20 @@ float sample_uniform() {
 }
 
 int sample_iter(size_t max_iter) {
+    if (max_iter == 0) {
+        return 0;
+    }
+    
     thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int> dist(1, max_iter);
-    return dist(rng); // Thread-safe random integer between 1 and max_iter
+    std::uniform_int_distribution<int> dist(1, static_cast<int>(max_iter));
+    
+    try {
+        return dist(rng);
+    } catch (const std::exception& e) {
+        std::cerr << "Error in sample_iter: " << e.what() << " max_iter: " << max_iter << std::endl;
+        return 1;  // Return safe default
+    }
 }
-
 // Sample an action according to the strategy probabilities
 int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
     thread_local std::mt19937 rng(std::random_device{}());
@@ -71,7 +102,6 @@ int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
     }
     return static_cast<int>(strat.size() - 1);
 }
-
 
 void take_action(PokerEngine* engine, int player, int act) {
     DEBUG_INFO("Chosen act: " << act);

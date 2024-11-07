@@ -4,17 +4,15 @@
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
 constexpr size_t NUM_TRAVERSALS = 8000;
-constexpr size_t MAX_SIZE = 1e7; // Adjust this based on your expected maximum number of advantages
+constexpr size_t MAX_SIZE = 2e7; // Adjust this based on your expected maximum number of advantages
 constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 2;
 constexpr size_t CFR_ITERS = 100;
-constexpr size_t NUM_THREADS = 4;
+constexpr size_t NUM_THREADS = 8;
 
 constexpr float BETA = 0;
 constexpr double EPSILON = 0.6;
-constexpr double EPSILON_START = 0.05;
-constexpr double EPSILON_END = 0.005;
 // engine
 constexpr int MAX_ROUND_BETS = 6;
 constexpr int BOARD_SIZE = 5;
@@ -26,7 +24,6 @@ constexpr int64_t NUM_LAYERS = 3;     // Number of Transformer layers
 
 // training
 constexpr size_t TRAIN_BS = 1024;
-constexpr size_t TRAVERSAL_BS = 2048;
 constexpr size_t TRAIN_EPOCHS = 100;
 constexpr size_t TRAIN_ITERS = 8000;
 
