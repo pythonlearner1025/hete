@@ -1,6 +1,5 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <torch/cuda.h>
 #include "model/model.h"
 #include <array>
 
@@ -80,14 +79,13 @@ std::vector<float> forward(
     const std::vector<float>& fracs,
     const std::vector<int>& status
 ) {
-    auto device = torch::kCPU;
     int total_round_size = fracs.size();
-    auto b_hands = init_batched_hands(1).to(device);
-    auto b_flops = init_batched_flops(1).to(device);
-    auto b_turns = init_batched_turns(1).to(device);
-    auto b_rivers = init_batched_rivers(1).to(device);
-    auto b_fracs = init_batched_fracs(1, total_round_size).to(device);
-    auto b_status = init_batched_status(1, total_round_size).to(device);
+    auto b_hands = init_batched_hands(1);
+    auto b_flops = init_batched_flops(1);
+    auto b_turns = init_batched_turns(1);
+    auto b_rivers = init_batched_rivers(1);
+    auto b_fracs = init_batched_fracs(1, total_round_size);
+    auto b_status = init_batched_status(1, total_round_size);
         
     int batch = 0;
     // Get accessors
@@ -125,8 +123,7 @@ std::vector<float> forward(
     }
 
     DeepCFRModel model;
-    torch::load(model, model_path, torch::Device(torch::kCPU));    
-    model->to(torch::Device(torch::kCPU));
+    torch::load(model, model_path);    
     auto logits = model->forward(
         b_hands, 
         b_flops, 

@@ -17,6 +17,7 @@
 #define DEBUG_LEVEL_INFO 1
 #define DEBUG_LEVEL_WARNING 2
 #define DEBUG_LEVEL_ERROR 3
+#define DEBUG_LEVEL_WRITE 4
 
 // Base debug macro using variadic arguments
 #define DEBUG_PRINT(level_str, ...) \
@@ -50,15 +51,19 @@
 #endif
 
 // New macro to write to a log file specified by path
-#define DEBUG_WRITE(log_file_path, ...) \
-    do { \
-        std::ofstream log_file(log_file_path, std::ios::app); \
-        if (log_file.is_open()) { \
-            log_file << __VA_ARGS__ << std::endl; \
-            log_file.close(); \
-        } else { \
-            std::cerr << "Failed to open log file: " << log_file_path << std::endl; \
-        } \
-    } while (0)
+#if DEBUG_LEVEL == DEBUG_LEVEL_WRITE || DEBUG_LEVEL == 0
+    #define DEBUG_WRITE(log_file_path, ...) \
+        do { \
+            std::ofstream log_file(log_file_path, std::ios::app); \
+            if (log_file.is_open()) { \
+                log_file << __VA_ARGS__ << std::endl; \
+                log_file.close(); \
+            } else { \
+                std::cerr << "Failed to open log file: " << log_file_path << std::endl; \
+            } \
+        } while (0)
+#else
+    #define DEBUG_WRITE(log_file_path, ...) do { } while (0)
+#endif
 
 #endif // DEBUG_H
