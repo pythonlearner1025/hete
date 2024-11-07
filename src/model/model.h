@@ -226,6 +226,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         auto output = action_head->forward(z); // [B, NUM_ACTIONS]
         return output;
     }
+   
 };
 TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>
 

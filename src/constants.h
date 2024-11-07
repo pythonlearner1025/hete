@@ -17,6 +17,8 @@ constexpr int BOARD_SIZE = 5;
 
 // model 
 constexpr int64_t MODEL_DIM = 256;
+constexpr int64_t NUM_HEADS = 4;
+constexpr int64_t NUM_LAYERS = 3;
 
 // training
 constexpr size_t TRAIN_BS = 32000;
