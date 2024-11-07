@@ -11,8 +11,6 @@
 #include <iterator>
 #include "../constants.h"
 #include "../debug.h"
-
-#include <torch/torch.h>
 #include <torch/script.h>
 #include <vector>
 #include <iostream>

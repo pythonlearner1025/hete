@@ -656,6 +656,7 @@ int main() {
 
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
+            train_net->to(cpu_device);
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);

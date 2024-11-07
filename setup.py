@@ -30,7 +30,7 @@ ext_modules = [
         ["lib/poker_inference_binding.cpp"],
         include_dirs=[
             libtorch_include_dir,
-            os.path.join(libtorch_include_dir, "torch", "csrc", "api", "include"),
+            os.path.join(libtorch_include_dir, "torch",  "csrc", "api", "include"),
             ompeval_include_dir,
             src_dir,
         ],

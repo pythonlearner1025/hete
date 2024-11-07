@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <torch/script.h>
 #include "model/model.h"
 #include <array>
 
@@ -123,17 +124,28 @@ std::vector<float> forward(
     }
 
     DeepCFRModel model;
-    torch::load(model, model_path);    
-    auto logits = model->forward(
-        b_hands, 
-        b_flops, 
-        b_turns,
-        b_rivers,
-        b_fracs,
-        b_status
-    );
+    torch::Tensor logits;
 
-    // Convert the strategy tensor to a std::vector<float>
+    try {
+        // Try loading and inferencing on CPU first
+        torch::load(model, model_path);
+        logits = model->forward(b_hands, b_flops, b_turns, b_rivers, b_fracs, b_status);
+    } catch (const c10::Error& e) {
+        // If CPU loading fails, try GPU
+        torch::load(model, model_path, torch::kCUDA);
+        // Move input tensors to GPU
+        b_hands = b_hands.to(torch::kCUDA);
+        b_flops = b_flops.to(torch::kCUDA);
+        b_turns = b_turns.to(torch::kCUDA);
+        b_rivers = b_rivers.to(torch::kCUDA);
+        b_fracs = b_fracs.to(torch::kCUDA);
+        b_status = b_status.to(torch::kCUDA);
+        
+        logits = model->forward(b_hands, b_flops, b_turns, b_rivers, b_fracs, b_status);
+        logits = logits.to(torch::kCPU);  // Move result back to CPU
+    }
+
+    // Convert the logits tensor to a std::vector<float>
     std::vector<float> logits_values(logits.size(1));
     auto logits_accessor = logits.accessor<float, 2>();
     for (int i = 0; i < logits.size(1); ++i) {
