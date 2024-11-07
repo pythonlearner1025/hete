@@ -31,6 +31,7 @@ constexpr double NULL_VALUE = -42.0;
 void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
     std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
     size_t current_total = total_advs[player].load();
+    cfr_iter_advs.fetch_add(1);
     
     if (current_total < MAX_SIZE) {
         global_player_advs[player][current_total] = adv;
@@ -180,12 +181,12 @@ void iterative_traverse(
 
         stack.push({0, initial_engine, nullptr, -1});
 
+        if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+            DEBUG_NONE("exceeds_max = True");
+            return;
+        }
+
         while (!stack.empty()) {
-            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
-                DEBUG_NONE("exceeds_max = True");
-                return;
-            }
-            
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
             stack.pop();
 
@@ -246,13 +247,13 @@ void iterative_traverse(
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
                 torch::Tensor logits = models[actor]->forward(
-                    hands, 
-                    flops, 
-                    turns, 
-                    rivers, 
-                    bet_fracs, 
-                    bet_status
-                );
+                    hands.to(gpu_device), 
+                    flops.to(gpu_device), 
+                    turns.to(gpu_device), 
+                    rivers.to(gpu_device), 
+                    bet_fracs.to(gpu_device), 
+                    bet_status.to(gpu_device)
+                ).to(cpu_device);
                 std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
                 int action_index = sample_action(strat);
@@ -475,7 +476,6 @@ int main() {
             DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
-            std::uniform_real_distribution<double> dist(0.0, 1.0);
             size_t train_bs = std::min(TRAIN_BS, cfr_iter_advs.load());
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             if (train_bs == 0) continue;
@@ -515,6 +515,8 @@ int main() {
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
 
+                optimizer.zero_grad();
+
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs).to(gpu_device),
                     batched_flops.slice(0, 0, train_bs).to(gpu_device),
@@ -539,6 +541,7 @@ int main() {
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             train_net->to(cpu_device);
+            train_net->eval();
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
