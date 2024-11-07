@@ -210,37 +210,40 @@ void outcome_sampling(
 ) {
     // Initialize RNG
     std::mt19937 rng(std::random_device{}());
-    torch::Tensor hand = init_batched_hands(1);
-    torch::Tensor flop = init_batched_flops(1);
-    torch::Tensor turn = init_batched_turns(1);
-    torch::Tensor river = init_batched_rivers(1);
-    torch::Tensor bet_fracs = init_batched_fracs(1);
-    torch::Tensor bet_status = init_batched_status(1);
+    torch::Tensor hand = init_batched_hands(1).to(gpu_device);
+    torch::Tensor flop = init_batched_flops(1).to(gpu_device);
+    torch::Tensor turn = init_batched_turns(1).to(gpu_device);
+    torch::Tensor river = init_batched_rivers(1).to(gpu_device);
+    torch::Tensor bet_fracs = init_batched_fracs(1).to(gpu_device);
+    torch::Tensor bet_status = init_batched_status(1).to(gpu_device);
 
     std::map<std::tuple<int, int>, DeepCFRModel> cache;
     // For each traversal
     for (int t = 0; t < traversals; ++t) {
-        if (t % 100 == 0) {
+        if (t % 1 == 0) {
             DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal= "<<t<<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
         }
         // Initialize models for each player
         std::array<DeepCFRModel, NUM_PLAYERS> models;
-        if (cfr_iter>1) {
-            int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
-            for (int p = 0; p < NUM_PLAYERS; ++p) {
+        int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
+        for (int p = 0; p < NUM_PLAYERS; ++p) {
+            if (cfr_iter>1) {
                 auto key = std::tuple(p, sampled_iter);
                 if (cache.find(key) == cache.end()) {
                     // Load the model from the path
                     auto path = model_path / std::to_string(sampled_iter) / std::to_string(p) / "model.pt";
                     models[p] = DeepCFRModel();
                     torch::load(models[p], path);
-                    models[p]->to(cpu_device);
+                    models[p]->to(gpu_device);
                     models[p]->eval();
                 } else {
                     models[p] = cache[key]; 
                 }
+            } else{
+                models[p]->to(gpu_device);
+                models[p]->eval();
             }
-        } 
+        }
         // Initialize the game
         PokerEngine engine(
             starting_stacks,

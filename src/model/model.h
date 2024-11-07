@@ -22,9 +22,6 @@
 #include "model.h"
 #include <unordered_map>
 
-// Define constants for model dimensions
-constexpr int64_t NUM_HEADS = 8;      // Number of attention heads
-constexpr int64_t NUM_LAYERS = 3;     // Number of Transformer layers
 
 // ========================
 // CardEmbedding Module
