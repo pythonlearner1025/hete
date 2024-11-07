@@ -22,10 +22,6 @@
 #include "model.h"
 #include <unordered_map>
 
-// Define constants for model dimensions
-constexpr int64_t NUM_HEADS = 8;      // Number of attention heads
-constexpr int64_t NUM_LAYERS = 3;     // Number of Transformer layers
-
 // ========================
 // CardEmbedding Module
 // ========================
@@ -197,7 +193,7 @@ struct DeepCFRModelImpl : torch::nn::Module {
         auto bet_feats = torch::cat({bet_fracs.unsqueeze(2), bet_status.unsqueeze(2)}, /*dim=*/2); // [B, num_bets, 2]
 
         // Create bet masks (assuming -1 indicates padding)
-        auto bet_masks = (bet_status >= 0).to(torch::kFloat); // [B, num_bets]
+        auto bet_masks = (bet_status > 0).to(torch::kFloat); // [B, num_bets]
 
         // Project to MODEL_DIM
         auto bet_embs = bet_embedding->forward(bet_feats); // [B, num_bets, MODEL_DIM]

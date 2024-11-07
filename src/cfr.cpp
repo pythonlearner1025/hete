@@ -408,6 +408,18 @@ int main() {
     std::string const_log_filename = run_dir + "/const.log";
     std::filesystem::path current_path = run_dir;
     init_constants_log(const_log_filename);
+
+    {
+        DeepCFRModel model;
+        int64_t total_params = 0;
+        for (const auto& p : model->parameters()) {
+            if (p.requires_grad()) {
+                total_params += p.numel();
+            }
+        }
+        DEBUG_NONE("Model parameters = " << total_params);
+        DEBUG_WRITE(logfile, "n_parameters=" << total_params);
+    }
     
     int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;
     int remaining_traversals = NUM_TRAVERSALS % NUM_THREADS;
@@ -537,11 +549,10 @@ int main() {
                     int iteration = global_player_advs[player][idx].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
-
                 auto batch_advantages = batched_advs.slice(0, 0, train_bs).to(gpu_device);
-
                 //auto transformed_advantages = batch_advantages.sign() * torch::log1p(batch_advantages.abs());
 
+                optimizer.zero_grad();
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs).to(gpu_device),
                     batched_flops.slice(0, 0, train_bs).to(gpu_device),
@@ -551,16 +562,15 @@ int main() {
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
 
-                auto loss = torch::nn::functional::mse_loss(
+                auto loss = torch::nn::functional::smooth_l1_loss(
                     pred, 
                     batch_advantages,
-                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kMean)
+                    torch::nn::functional::SmoothL1LossFuncOptions().reduction(torch::kMean)
                 );
 
                 loss.backward();
                 torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
                 optimizer.step();
-                optimizer.zero_grad();
                 if (train_iter % 100 == 0) {
                     DEBUG_NONE("ITER: " << train_iter << "/" << train_iters << " LOSS: " << loss.to(cpu_device).item());            
                 }
