@@ -74,6 +74,23 @@ struct Advantage {
     }
 };
 
+std::array<std::mutex, NUM_PLAYERS> player_advs_mutex;
+
+void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
+    std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
+    size_t current_total = total_advs[player].load();
+    cfr_iter_advs.fetch_add(1);
+    
+    if (current_total < MAX_SIZE) {
+        global_player_advs[player][current_total] = adv;
+        total_advs[player].fetch_add(1);
+    } else {
+        std::uniform_int_distribution<size_t> dist(0, current_total - 1);
+        size_t r = dist(rng);
+        global_player_advs[player][r] = adv;
+    }
+}
+
 auto format_scientific = [](int number) -> std::string {
     if (number == 0) {
         return "0.0e0";
@@ -113,6 +130,8 @@ void iterative_traverse(
     double small_bet,
     double big_bet
 ) {
+    torch::NoGradGuard no_grad_guard;
+    std::mt19937 rng(std::random_device{}() + thread_id);  // Add thread_id to make seed unique per thread
     PokerEngine initial_engine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
 
     auto hands = init_batched_hands(1);
@@ -129,22 +148,29 @@ void iterative_traverse(
     auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
     auto batched_status = init_batched_status(TRAVERSAL_BS);
 
-    DeepCFRModel cpu_net = nets[player];
-    cpu_net->to(cpu_device);
-    cpu_net->eval();
+    DeepCFRModel player_net = nets[player];
+    player_net->to(gpu_device);
+    player_net->eval();
 
-    DeepCFRModel opp_cpu_net = nets[get_opp(player)];
-    opp_cpu_net->to(cpu_device);
-    opp_cpu_net->eval();
+    DeepCFRModel opp_net = nets[get_opp(player)];
+    opp_net->to(gpu_device);
+    opp_net->eval();
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
         int n_total_advs = total_advs[player].load();
         int n_cfr_advs = cfr_iter_advs.load();
-        DEBUG_NONE("Thread=" << thread_id
-               << " Iter=" << traversal
+
+        if (traversal % PRINT_FREQ == 0) {
+            DEBUG_NONE("Thread=" << thread_id
+               << " traversal=" << traversal << "/" << traversals_per_thread
                << " Cfr_iter_advs=" << format_scientific(n_cfr_advs)
-               << " Player=" << player
-               << " Total_player_advs=" << format_scientific(n_total_advs));
+               << " Player=" << player);
+        }
+
+        if (n_cfr_advs >= CFR_MAX_SIZE) {
+            DEBUG_NONE("exceeds_max = True");
+            return;
+        } 
         // Reset manipulators to default formatting if needed
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
@@ -153,12 +179,6 @@ void iterative_traverse(
         stack.push({0, initial_engine, nullptr, -1});
 
         while (!stack.empty()) {
-
-            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
-                DEBUG_NONE("exceeds_max = True");
-                return;
-            }
-            
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
             stack.pop();
 
@@ -215,18 +235,18 @@ void iterative_traverse(
                 get_state(engine, state.get(), actor);
                 update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
-                if (opp_cpu_net.get() == nullptr) {
+                if (opp_net.get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = opp_cpu_net->forward(
-                    hands, 
-                    flops, 
-                    turns, 
-                    rivers, 
-                    bet_fracs, 
-                    bet_status
+                torch::Tensor logits = opp_net->forward(
+                    hands.to(gpu_device), 
+                    flops.to(gpu_device), 
+                    turns.to(gpu_device), 
+                    rivers.to(gpu_device), 
+                    bet_fracs.to(gpu_device), 
+                    bet_status.to(gpu_device)
                 );
-                std::array<double, NUM_ACTIONS> strat = regret_match(logits);
+                std::array<double, NUM_ACTIONS> strat = regret_match(logits.to(cpu_device));
 
                 int action_index = sample_action(strat);
                 while (!verify_action(&engine, actor, action_index)) {
@@ -238,25 +258,16 @@ void iterative_traverse(
             }
         }
 
-        DeepCFRModel gpu_net = nets[player];
-        gpu_net->to(gpu_device);
-        gpu_net->eval();
-
         // Begin batch inference
-        DEBUG_NONE("batch inference time");
-        DEBUG_NONE("num_advs = " << all_advs.size());
-        DEBUG_NONE("cfr_iter_advs = " << cfr_iter_advs.load());
-        if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
-            DEBUG_NONE("exceeds_max = True");
-            return;
-        } else {
-            //DEBUG_NONE("exceeds_max = False");
-            cfr_iter_advs.fetch_add(all_advs.size());
-        }
-
         size_t num_repeats = (all_advs.size() + TRAVERSAL_BS - 1) / TRAVERSAL_BS;
-        DEBUG_NONE("num_repeats = " << num_repeats);
         size_t advs_idx = 0;
+
+        if (traversal % PRINT_FREQ == 0) {
+            DEBUG_NONE("batch inference time");
+            DEBUG_NONE("num_advs = " << all_advs.size());
+            DEBUG_NONE("cfr_iter_advs = " << cfr_iter_advs.load());
+            DEBUG_NONE("num_repeats = " << num_repeats);
+        }
 
         for (size_t r = 0; r < num_repeats; ++r) {
             size_t batch_size = std::min(TRAVERSAL_BS, all_advs.size()-advs_idx);
@@ -277,7 +288,7 @@ void iterative_traverse(
                 advs_idx++;
             }
 
-            auto logits = gpu_net->forward(
+            auto logits = player_net->forward(
                 batched_hands.slice(0,0,batch_size).to(gpu_device),
                 batched_flops.slice(0,0,batch_size).to(gpu_device),
                 batched_turns.slice(0,0,batch_size).to(gpu_device),
@@ -327,18 +338,9 @@ void iterative_traverse(
                 }
             }
 
-            size_t current_player_total = total_advs[player].fetch_add(1);
-            if (current_player_total < MAX_SIZE) {
-                global_player_advs[player][current_player_total] = TraverseAdvantage{terminal_adv->state, t, adv_values};
-            } else {
-                size_t r = std::rand() % (current_player_total + 1);
-                if (r < MAX_SIZE) {
-                    global_player_advs[player][r] = TraverseAdvantage{terminal_adv->state, t, adv_values};
-                }
-            }
+            safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values}, rng);
 
             if (terminal_adv->parent.expired()) {
-                // Handle case where parent no longer exists
                 continue;
             }
 
