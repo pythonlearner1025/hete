@@ -495,7 +495,7 @@ int main() {
             std::iota(pool.begin(), pool.end(), 0);
             std::shuffle(pool.begin(), pool.end(), rng);
             size_t window_start = 0;
-
+            torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
             // Inside the training loop
             for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
                 // Rotate and shuffle window
@@ -525,7 +525,6 @@ int main() {
                     int iteration = global_player_advs[player][pool[i]].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
-                torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
 
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs).to(gpu_device),

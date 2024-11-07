@@ -21,7 +21,7 @@ constexpr int64_t NUM_HEADS = 1;
 constexpr int64_t NUM_LAYERS = 1;
 
 // training
-constexpr size_t TRAIN_BS = 20000;
+constexpr size_t TRAIN_BS = 1024;
 constexpr size_t TRAVERSAL_BS = 1024;
 constexpr size_t TRAIN_EPOCHS = 1;
 constexpr size_t TRAIN_ITERS = 8000;
