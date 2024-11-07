@@ -22,64 +22,66 @@
 #include "model.h"
 #include <unordered_map>
 
+// Define constants for model dimensions
+constexpr int64_t NUM_HEADS = 8;      // Number of attention heads
+constexpr int64_t NUM_LAYERS = 3;     // Number of Transformer layers
+
 // ========================
 // CardEmbedding Module
 // ========================
 
-struct CardEmbeddingImpl :  torch::nn::Module {
+struct CardEmbeddingImpl : torch::nn::Module {
     torch::nn::Embedding rank{nullptr}, suit{nullptr}, card{nullptr};
 
     // Constructor
     CardEmbeddingImpl() {
         // Initialize Embedding layers
-        rank = register_module("rank", torch::nn::Embedding(13,MODEL_DIM));
-        suit = register_module("suit", torch::nn::Embedding(4,MODEL_DIM));
-        card = register_module("card", torch::nn::Embedding(52,MODEL_DIM));
+        rank = register_module("rank", torch::nn::Embedding(13, MODEL_DIM));
+        suit = register_module("suit", torch::nn::Embedding(4, MODEL_DIM));
+        card = register_module("card", torch::nn::Embedding(52, MODEL_DIM));
     }
 
-    // Forward pass
-    torch::Tensor forward(torch::Tensor input) {
+    // Forward pass with mask output
+    std::tuple<torch::Tensor, torch::Tensor> forward_with_mask(torch::Tensor input) {
         auto B = input.size(0);
         auto num_cards = input.size(1);
-        
+
         // Flatten the input
         auto x = input.reshape({-1});
-        
+
         // Create a mask for valid cards (input >= 0)
-                                                      // set copy to true
         auto valid = (x >= 0).to(torch::kFloat, false, true); // -1 indicates 'no card'
-        
+
         // Clamp negative indices to 0
         x = torch::clamp(x, /*min=*/0);
-        
+
         // Ensure x is of integer type
         if (x.dtype() != torch::kInt) {
             x = x.to(torch::kInt);
         }
-        
-        // Compute rank and suit indices using integer division and modulo
-        auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt);      // [B*num_cards]
-        auto suit_indices = torch::remainder(x, 4).to(torch::kInt);        // [B*num_cards]
-        
-        // Ensure that rank_indices and suit_indices are within valid ranges
-        rank_indices = torch::clamp(rank_indices, 0, 12); // Ranks: 0-12
-        suit_indices = torch::clamp(suit_indices, 0, 3);  // Suits: 0-3
+
+        // Compute rank and suit indices
+        auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt); // [B*num_cards]
+        auto suit_indices = torch::remainder(x, 4).to(torch::kInt);     // [B*num_cards]
 
         // Compute embeddings
-        auto card_embs = card->forward(x);             // [B*num_cards,MODEL_DIM]
-        auto rank_embs = rank->forward(rank_indices);  // [B*num_cards,MODEL_DIM]
-        auto suit_embs = suit->forward(suit_indices);  // [B*num_cards,MODEL_DIM]
-        
+        auto card_embs = card->forward(x);             // [B*num_cards, MODEL_DIM]
+        auto rank_embs = rank->forward(rank_indices);  // [B*num_cards, MODEL_DIM]
+        auto suit_embs = suit->forward(suit_indices);  // [B*num_cards, MODEL_DIM]
+
         // Sum the embeddings
-        auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards,MODEL_DIM]
-        
+        auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards, MODEL_DIM]
+
         // Zero out embeddings for 'no card'
-        embs = embs * valid.unsqueeze(1); // [B*num_cards,MODEL_DIM]
-        
-        // Reshape and sum across cards
-        embs = embs.reshape({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
-        //DEBUG_NONE("reshaped");
-        return embs;
+        embs = embs * valid.unsqueeze(1); // [B*num_cards, MODEL_DIM]
+
+        // Reshape to [B, num_cards, MODEL_DIM]
+        embs = embs.reshape({B, num_cards, MODEL_DIM}); // [B, num_cards, MODEL_DIM]
+
+        // Reshape valid mask
+        valid = valid.reshape({B, num_cards}); // [B, num_cards]
+
+        return std::make_tuple(embs, valid);
     }
 };
 TORCH_MODULE(CardEmbedding); // Creates CardEmbedding as a ModuleHolder<CardEmbeddingImpl>
@@ -88,110 +90,146 @@ TORCH_MODULE(CardEmbedding); // Creates CardEmbedding as a ModuleHolder<CardEmbe
 // DeepCFRModel Module
 // ========================
 
-struct DeepCFRModelImpl :  torch::nn::Module {
-    torch::nn::ModuleList card_embeddings{nullptr};
-    torch::nn::Linear card1{nullptr}, card2{nullptr}, card3{nullptr};
-    torch::nn::Linear bet1{nullptr}, bet2{nullptr};
-    torch::nn::Linear comb1{nullptr}, comb2{nullptr}, comb3{nullptr};
-    torch::nn::LayerNorm norm{nullptr};
-    torch::nn::Linear action_head{nullptr};
+struct DeepCFRModelImpl : torch::nn::Module {
+    // Embeddings
     CardEmbedding hand_embed{nullptr};
     CardEmbedding flop_embed{nullptr};
     CardEmbedding turn_embed{nullptr};
     CardEmbedding river_embed{nullptr};
 
-    // Constructor
-    DeepCFRModelImpl(){
-        
-        int64_t n_card_types = 4;
+    // Transformer encoders
+    torch::nn::TransformerEncoder card_encoder{nullptr};
+    torch::nn::TransformerEncoder bet_encoder{nullptr};
 
+    // Bet embedding
+    torch::nn::Linear bet_embedding{nullptr};
+
+    // Combined trunk layers
+    torch::nn::Linear comb1{nullptr}, comb2{nullptr}, comb3{nullptr};
+
+    // Normalization
+    torch::nn::LayerNorm norm{nullptr};
+
+    // Action head
+    torch::nn::Linear action_head{nullptr};
+
+    // Constructor
+    DeepCFRModelImpl() {
+        int64_t n_card_types = 4; // Hand, flop, turn, river
+
+        // Initialize card embeddings
         hand_embed = register_module("hand_embed", CardEmbedding());
         flop_embed = register_module("flop_embed", CardEmbedding());
         turn_embed = register_module("turn_embed", CardEmbedding());
         river_embed = register_module("river_embed", CardEmbedding());
 
-        // Initialize card linear layers
-        card1 = register_module("card1", torch::nn::Linear(MODEL_DIM* n_card_types,MODEL_DIM));
-        card2 = register_module("card2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        card3 = register_module("card3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
+        // Initialize card TransformerEncoder
+        auto card_encoder_layer_options = torch::nn::TransformerEncoderLayerOptions(MODEL_DIM, NUM_HEADS);
+        card_encoder_layer_options.activation(torch::kGELU);
+        auto card_encoder_layer = torch::nn::TransformerEncoderLayer(card_encoder_layer_options);
+        card_encoder = register_module("card_encoder", torch::nn::TransformerEncoder(card_encoder_layer, NUM_LAYERS));
 
-        // Initialize bet linear layers
-        // Calculate input size based on the formula: (MAX_ROUND_BETS * NUM_PLAYERS * nrounds - nrounds) * 2
-        int64_t bet_input_size = (MAX_ROUND_BETS * NUM_PLAYERS * 4) * 2;
-        //std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
-        bet1 = register_module("bet1", torch::nn::Linear(bet_input_size,MODEL_DIM));
-        bet2 = register_module("bet2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
+        // Initialize bet embedding
+        bet_embedding = register_module("bet_embedding", torch::nn::Linear(2, MODEL_DIM));
+
+        // Initialize bet TransformerEncoder
+        auto bet_encoder_layer_options = torch::nn::TransformerEncoderLayerOptions(MODEL_DIM, NUM_HEADS);
+        bet_encoder_layer_options.activation(torch::kGELU);
+        auto bet_encoder_layer = torch::nn::TransformerEncoderLayer(bet_encoder_layer_options);
+        bet_encoder = register_module("bet_encoder", torch::nn::TransformerEncoder(bet_encoder_layer, NUM_LAYERS));
 
         // Initialize combined trunk layers
-        comb1 = register_module("comb1", torch::nn::Linear(2 *MODEL_DIM,MODEL_DIM));
-        comb2 = register_module("comb2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        comb3 = register_module("comb3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        
-        // Correct LayerNorm initialization with a vector
+        comb1 = register_module("comb1", torch::nn::Linear(2 * MODEL_DIM, MODEL_DIM));
+        comb2 = register_module("comb2", torch::nn::Linear(MODEL_DIM, MODEL_DIM));
+        comb3 = register_module("comb3", torch::nn::Linear(MODEL_DIM, MODEL_DIM));
+
+        // LayerNorm
         norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({MODEL_DIM})));
-        
+
+        // Action head
         action_head = register_module("action_head", torch::nn::Linear(MODEL_DIM, NUM_ACTIONS));
     }
 
     // Forward pass
     torch::Tensor forward(
-        torch::Tensor hand, 
-        torch::Tensor flop, 
-        torch::Tensor turn, 
-        torch::Tensor river, 
-        torch::Tensor bet_fracs, 
+        torch::Tensor hand,
+        torch::Tensor flop,
+        torch::Tensor turn,
+        torch::Tensor river,
+        torch::Tensor bet_fracs,
         torch::Tensor bet_status
     ) {
-        /*
-        Parameters:
-            cards: std::vector<torch::Tensor> of size n_card_types
-                   Each tensor shape: [N, num_cards_in_group] (e.g., [N, 2], [N, 3], etc.)
-            bet_fracs: torch::Tensor of shape [N, bet_input_size / 2]
-            bet_status: torch::Tensor of shape [N, bet_input_size / 2]
-        */
+        // Card Embeddings with masks
+        torch::Tensor hand_emb, hand_mask;
+        std::tie(hand_emb, hand_mask) = hand_embed->forward_with_mask(hand);
 
-        // 1. Card Branch
-        torch::Tensor card_embs_cat;
-        torch::Tensor hand_emb = hand_embed->forward(hand);
-        torch::Tensor flop_emb = flop_embed->forward(flop);
-        torch::Tensor turn_emb = turn_embed->forward(turn);
-        torch::Tensor river_emb = river_embed->forward(river);
+        torch::Tensor flop_emb, flop_mask;
+        std::tie(flop_emb, flop_mask) = flop_embed->forward_with_mask(flop);
 
-        // Concatenate embeddings from all card groups
-        card_embs_cat = torch::cat({hand_emb, flop_emb, turn_emb, river_emb}, /*dim=*/1); // [N,MODEL_MODEL_DIM * n_card_types]
+        torch::Tensor turn_emb, turn_mask;
+        std::tie(turn_emb, turn_mask) = turn_embed->forward_with_mask(turn);
 
-        // Pass through card linear layers with ReLU activations
-        auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
-        x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
-        x = torch::relu(card3->forward(x));                  // [N,MODEL_DIM]
+        torch::Tensor river_emb, river_mask;
+        std::tie(river_emb, river_mask) = river_embed->forward_with_mask(river);
 
-        // 2. Bet Branch
-        auto bet_size = bet_fracs.clamp(/*min=*/0, /*max=*/1e6); // Clamp between 0 and 1e6
-        auto bet_occurred = bet_status.to(torch::kFloat);        // [N, bet_input_size / 2]
-        auto bet_feats = torch::cat({bet_size, bet_occurred}, /*dim=*/1); // [N, bet_input_size]
-        
-        // Pass through bet linear layers with ReLU and residual connection
-        // Inside the forward function, just before the Bet Branch
-        /*
-        DEBUG_NONE("bet_feats shape: " << bet_feats.sizes());
-        DEBUG_NONE("bet1 weight shape: " << bet1->weight.sizes());
-        DEBUG_NONE("bet1 bias shape: " << bet1->bias.sizes());
-        */
-        auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
-        y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
+        // Concatenate embeddings and masks
+        auto card_embs = torch::cat({hand_emb, flop_emb, turn_emb, river_emb}, /*dim=*/1);   // [B, total_num_cards, MODEL_DIM]
+        auto card_masks = torch::cat({hand_mask, flop_mask, turn_mask, river_mask}, /*dim=*/1); // [B, total_num_cards]
 
-        // 3. Combined Trunk
-        auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 *MODEL_DIM]
-        z = torch::relu(comb1->forward(z));                       // [N,MODEL_DIM]
-        z = torch::relu(comb2->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        z = torch::relu(comb3->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        z = norm->forward(z);                                      // LayerNorm
-        
+        // Create attention mask for cards
+        auto src_key_padding_mask = ~card_masks.to(torch::kBool); // [B, total_num_cards]
+
+        // Transpose embeddings for Transformer
+        auto card_embs_transposed = card_embs.transpose(0, 1); // [sequence_length, B, MODEL_DIM]
+
+        // Process through TransformerEncoder
+        auto card_encodings = card_encoder->forward(card_embs_transposed, /*src_mask=*/{}, /*src_key_padding_mask=*/src_key_padding_mask); // [sequence_length, B, MODEL_DIM]
+
+        // Transpose back
+        card_encodings = card_encodings.transpose(0, 1); // [B, sequence_length, MODEL_DIM]
+
+        // Aggregate the card encodings
+        auto card_masks_expanded = card_masks.unsqueeze(2); // [B, sequence_length, 1]
+        auto x = (card_encodings * card_masks_expanded).sum(1) / card_masks_expanded.sum(1).clamp_min(1e-9); // [B, MODEL_DIM]
+
+        // Bet Embeddings
+        // Combine bet_fracs and bet_status
+        auto bet_feats = torch::cat({bet_fracs.unsqueeze(2), bet_status.unsqueeze(2)}, /*dim=*/2); // [B, num_bets, 2]
+
+        // Create bet masks (assuming -1 indicates padding)
+        auto bet_masks = (bet_status >= 0).to(torch::kFloat); // [B, num_bets]
+
+        // Project to MODEL_DIM
+        auto bet_embs = bet_embedding->forward(bet_feats); // [B, num_bets, MODEL_DIM]
+
+        // Transpose embeddings
+        auto bet_embs_transposed = bet_embs.transpose(0, 1); // [num_bets, B, MODEL_DIM]
+
+        // Create bet attention mask
+        auto bet_key_padding_mask = ~bet_masks.to(torch::kBool); // [B, num_bets]
+
+        // Process through bet TransformerEncoder
+        auto bet_encodings = bet_encoder->forward(bet_embs_transposed, /*src_mask=*/{}, /*src_key_padding_mask=*/bet_key_padding_mask); // [num_bets, B, MODEL_DIM]
+
+        // Transpose back
+        bet_encodings = bet_encodings.transpose(0, 1); // [B, num_bets, MODEL_DIM]
+
+        // Aggregate bet encodings
+        auto bet_masks_expanded = bet_masks.unsqueeze(2); // [B, num_bets, 1]
+        auto y = (bet_encodings * bet_masks_expanded).sum(1) / bet_masks_expanded.sum(1).clamp_min(1e-9); // [B, MODEL_DIM]
+
+        // Combined Trunk
+        auto z = torch::cat({x, y}, /*dim=*/1); // [B, 2 * MODEL_DIM]
+        z = torch::gelu(comb1->forward(z));
+        z = torch::gelu(comb2->forward(z) + z); // Residual connection
+        z = torch::gelu(comb3->forward(z) + z); // Residual connection
+        z = norm->forward(z);                   // LayerNorm
+
         // Action Head
-        auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
-        //std::cout << "forward complete" << std::endl;
+        auto output = action_head->forward(z); // [B, NUM_ACTIONS]
         return output;
     }
 };
 TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>
+
 #endif // MODEL_H

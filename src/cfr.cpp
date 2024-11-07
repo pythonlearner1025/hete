@@ -551,10 +551,10 @@ int main() {
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
 
-                auto loss = torch::nn::functional::smooth_l1_loss(
+                auto loss = torch::nn::functional::mse_loss(
                     pred, 
                     batch_advantages,
-                    torch::nn::functional::SmoothL1LossFuncOptions().reduction(torch::kMean)
+                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kMean)
                 );
 
                 loss.backward();
