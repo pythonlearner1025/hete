@@ -1,0 +1,16 @@
+{"time":"2024-11-06T23:26:53.382813384-05:00","level":"INFO","msg":"using version","core version":"0.18.6"}
+{"time":"2024-11-06T23:26:53.382829025-05:00","level":"INFO","msg":"created symlink","path":"/home/minjunes/hete/wandb/run-20241106_232653-9lucxc0o/logs/debug-core.log"}
+{"time":"2024-11-06T23:26:53.487014626-05:00","level":"INFO","msg":"created new stream","id":"9lucxc0o"}
+{"time":"2024-11-06T23:26:53.487047801-05:00","level":"INFO","msg":"stream: started","id":"9lucxc0o"}
+{"time":"2024-11-06T23:26:53.487079403-05:00","level":"INFO","msg":"writer: Do: started","stream_id":{"value":"9lucxc0o"}}
+{"time":"2024-11-06T23:26:53.487486289-05:00","level":"INFO","msg":"sender: started","stream_id":"9lucxc0o"}
+{"time":"2024-11-06T23:26:53.487238814-05:00","level":"INFO","msg":"handler: started","stream_id":{"value":"9lucxc0o"}}
+{"time":"2024-11-06T23:26:55.186072875-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2024-11-06T23:26:57.11833248-05:00","level":"INFO","msg":"stream: closing","id":"9lucxc0o"}
+{"time":"2024-11-06T23:26:57.11835795-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2024-11-06T23:26:57.118756009-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2024-11-06T23:26:57.4845637-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2024-11-06T23:26:57.621614443-05:00","level":"INFO","msg":"handler: closed","stream_id":{"value":"9lucxc0o"}}
+{"time":"2024-11-06T23:26:57.621654601-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":{"value":"9lucxc0o"}}
+{"time":"2024-11-06T23:26:57.621681283-05:00","level":"INFO","msg":"sender: closed","stream_id":"9lucxc0o"}
+{"time":"2024-11-06T23:26:57.621698898-05:00","level":"INFO","msg":"stream: closed","id":"9lucxc0o"}

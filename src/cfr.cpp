@@ -2,10 +2,6 @@
 #include "debug.h"
 #include <torch/torch.h>
 #include <torch/script.h>
-//#include <ATen/autocast_mode.h>
-//#include <ATen/cuda/CUDAGraph.h>
-//#include <ATen/cuda/CUDAContext.h>
-//#include <c10/cuda/CUDAGuard.h>
 #include <torch/cuda.h>
 #include <tuple>
 #include <thread>
@@ -528,28 +524,17 @@ int main() {
                     batched_fracs.slice(0, 0, train_bs).to(gpu_device), 
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
-                
-                /*
-                DEBUG_NONE("Pred tensor contains zeros only: " << std::to_string(pred.abs().sum().item<float>() == 0));
-                DEBUG_NONE("Advantages tensor contains zeros only: " << std::to_string(batched_advs.abs().sum().item<float>() == 0));
-                DEBUG_NONE("Pred shape: " << pred.sizes());
-                DEBUG_NONE("Target shape: " << batched_advs.slice(0, 0, train_bs).sizes());
-                DEBUG_NONE("Pred sample: " << pred.slice(0, 0, 5));
-                DEBUG_NONE("Target sample: " << batched_advs.slice(0, 0, 5));
-                */
 
                 auto loss = torch::nn::functional::mse_loss(
                     pred, 
                     batched_advs.slice(0, 0, train_bs).to(gpu_device),
-                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kNone)
+                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kMean)
                 );
 
-                loss *= batched_iters.slice(0, 0, train_bs).to(gpu_device);
-                auto batch_mean_loss = loss.mean(1).mean();
-                batch_mean_loss.backward();
-                //torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
+                loss.backward();
+                torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
                 optimizer.step();
-                DEBUG_NONE("ITER: " << train_iter << "/" << TRAIN_ITERS << " LOSS: " << batch_mean_loss.to(cpu_device).item());            
+                DEBUG_NONE("ITER: " << train_iter << "/" << TRAIN_ITERS << " LOSS: " << loss.to(cpu_device).item());            
             }
 
             std::filesystem::path current_path = run_dir;
@@ -559,19 +544,6 @@ int main() {
             torch::save(train_net, save_path);
             DEBUG_NONE("successfully saved nets");
             DEBUG_WRITE(logfile, "successfully saved at: " << save_path);
-
-            /*
-            // eval saved net
-            std::string command = "export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH && . ../env/bin/activate && python ../eval.py --log_path " + run_dir + " --num_hands 100";
-            DEBUG_NONE("Executing command: " << command);
-            DEBUG_WRITE(logfile, "Executing command: " << command);
-            int result = system(command.c_str());
-            if (result == 0) {
-                DEBUG_NONE("Evaluation script executed successfully");
-            } else {
-                DEBUG_NONE("Error executing evaluation script. Return code: " << result);
-            }
-            */
 
             if (std::filesystem::exists(save_path)) {
                 DEBUG_NONE("File successfully created at " << save_path);
