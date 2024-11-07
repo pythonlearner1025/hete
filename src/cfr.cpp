@@ -20,12 +20,27 @@ struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
 } rand_init;
 
+std::array<std::mutex, NUM_PLAYERS> player_advs_mutex;
 std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
 std::array<std::atomic<size_t>, NUM_PLAYERS> total_advs{};
 std::atomic<size_t> cfr_iter_advs(0);
 torch::Device cpu_device(torch::kCPU);
-torch::Device gpu_device = torch::cuda::is_available() ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
+torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
+
+void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
+    std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
+    size_t current_total = total_advs[player].load();
+    
+    if (current_total < MAX_SIZE) {
+        global_player_advs[player][current_total] = adv;
+        total_advs[player].fetch_add(1);
+    } else {
+        std::uniform_int_distribution<size_t> dist(0, current_total - 1);
+        size_t r = dist(rng);
+        global_player_advs[player][r] = adv;
+    }
+}
 
 struct Advantage {
     std::array<double, NUM_ACTIONS> values;
@@ -74,23 +89,6 @@ struct Advantage {
     }
 };
 
-std::array<std::mutex, NUM_PLAYERS> player_advs_mutex;
-
-void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
-    std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
-    size_t current_total = total_advs[player].load();
-    cfr_iter_advs.fetch_add(1);
-    
-    if (current_total < MAX_SIZE) {
-        global_player_advs[player][current_total] = adv;
-        total_advs[player].fetch_add(1);
-    } else {
-        std::uniform_int_distribution<size_t> dist(0, current_total - 1);
-        size_t r = dist(rng);
-        global_player_advs[player][r] = adv;
-    }
-}
-
 auto format_scientific = [](int number) -> std::string {
     if (number == 0) {
         return "0.0e0";
@@ -115,13 +113,13 @@ auto format_scientific = [](int number) -> std::string {
 
 int get_opp(int player) {
     if (player == 1) return 0;
-    else return 1;
+    return 1;
 }
 
 void iterative_traverse(
     int thread_id,
     int player,
-    std::array<DeepCFRModel, NUM_PLAYERS>& nets,
+    std::filesystem::path model_path,
     int t,
     int traversals_per_thread,
     const std::array<double, NUM_PLAYERS>& starting_stacks,
@@ -148,29 +146,33 @@ void iterative_traverse(
     auto batched_fracs = init_batched_fracs(TRAVERSAL_BS);
     auto batched_status = init_batched_status(TRAVERSAL_BS);
 
-    DeepCFRModel player_net = nets[player];
-    player_net->to(gpu_device);
-    player_net->eval();
-
-    DeepCFRModel opp_net = nets[get_opp(player)];
-    opp_net->to(gpu_device);
-    opp_net->eval();
+    std::map<std::tuple<int, int>, DeepCFRModel> cache;
 
     for (int traversal = 0; traversal < traversals_per_thread; ++traversal) {
+        DEBUG_NONE("cfr_iter="<<t<<" thread="<<thread_id<<" traversal= "<<traversal<<"/"<<traversals_per_thread<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
+        // Initialize models for each player
+        std::array<DeepCFRModel, NUM_PLAYERS> models;
+        for (int p = 0; p < NUM_PLAYERS; ++p) {
+            if (t>1) {
+                int sampled_iter = sample_iter(static_cast<size_t>(t-1));
+                auto key = std::tuple(p, sampled_iter);
+                if (cache.find(key) == cache.end()) {
+                    // Load the model from the path
+                    auto path = model_path / std::to_string(sampled_iter) / std::to_string(p) / "model.pt";
+                    models[p] = DeepCFRModel();
+                    torch::load(models[p], path);
+                    models[p]->to(gpu_device);
+                    models[p]->eval();
+                } else {
+                    models[p] = cache[key]; 
+                }
+            } else {
+                models[p]->to(gpu_device);
+                models[p]->eval();
+            }
+        }
         int n_total_advs = total_advs[player].load();
         int n_cfr_advs = cfr_iter_advs.load();
-
-        if (traversal % PRINT_FREQ == 0) {
-            DEBUG_NONE("Thread=" << thread_id
-               << " traversal=" << traversal << "/" << traversals_per_thread
-               << " Cfr_iter_advs=" << format_scientific(n_cfr_advs)
-               << " Player=" << player);
-        }
-
-        if (n_cfr_advs >= CFR_MAX_SIZE) {
-            DEBUG_NONE("exceeds_max = True");
-            return;
-        } 
         // Reset manipulators to default formatting if needed
         std::stack<std::tuple<int, PokerEngine, std::shared_ptr<Advantage>, int>> stack;
         std::stack<std::shared_ptr<Advantage>> terminal_advs;
@@ -179,6 +181,11 @@ void iterative_traverse(
         stack.push({0, initial_engine, nullptr, -1});
 
         while (!stack.empty()) {
+            if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+                DEBUG_NONE("exceeds_max = True");
+                return;
+            }
+            
             auto [depth, engine, parent_advantage, parent_action] = stack.top();
             stack.pop();
 
@@ -232,21 +239,21 @@ void iterative_traverse(
                 // opponent case
                 int actor = engine.turn();
                 auto state = std::make_shared<State>();
-                get_state(engine, state.get(), actor);
+                get_state(engine, state.get(), player);
                 update_tensors(*(state.get()), hands, flops, turns, rivers, bet_fracs, bet_status);
 
-                if (opp_net.get() == nullptr) {
+                if (models[actor].get() == nullptr) {
                     throw std::runtime_error("net_ptr is nullptr for actor " + std::to_string(actor));
                 }
-                torch::Tensor logits = opp_net->forward(
-                    hands.to(gpu_device), 
-                    flops.to(gpu_device), 
-                    turns.to(gpu_device), 
-                    rivers.to(gpu_device), 
-                    bet_fracs.to(gpu_device), 
-                    bet_status.to(gpu_device)
+                torch::Tensor logits = models[actor]->forward(
+                    hands, 
+                    flops, 
+                    turns, 
+                    rivers, 
+                    bet_fracs, 
+                    bet_status
                 );
-                std::array<double, NUM_ACTIONS> strat = regret_match(logits.to(cpu_device));
+                std::array<double, NUM_ACTIONS> strat = regret_match(logits);
 
                 int action_index = sample_action(strat);
                 while (!verify_action(&engine, actor, action_index)) {
@@ -257,17 +264,21 @@ void iterative_traverse(
                 stack.push(std::make_tuple(depth + 1, std::move(engine), parent_advantage, parent_action));
             }
         }
-
+      
         // Begin batch inference
-        size_t num_repeats = (all_advs.size() + TRAVERSAL_BS - 1) / TRAVERSAL_BS;
-        size_t advs_idx = 0;
-
-        if (traversal % PRINT_FREQ == 0) {
-            DEBUG_NONE("batch inference time");
-            DEBUG_NONE("num_advs = " << all_advs.size());
-            DEBUG_NONE("cfr_iter_advs = " << cfr_iter_advs.load());
-            DEBUG_NONE("num_repeats = " << num_repeats);
+        DEBUG_NONE("batch inference time");
+        DEBUG_NONE("num_advs = " << all_advs.size());
+        DEBUG_NONE("cfr_iter_advs = " << cfr_iter_advs.load());
+        if (cfr_iter_advs.load() >= CFR_MAX_SIZE) {
+            DEBUG_NONE("exceeds_max = True");
+            return;
+        } else {
+            cfr_iter_advs.fetch_add(all_advs.size());
         }
+
+        size_t num_repeats = (all_advs.size() + TRAVERSAL_BS - 1) / TRAVERSAL_BS;
+        DEBUG_NONE("num_repeats = " << num_repeats);
+        size_t advs_idx = 0;
 
         for (size_t r = 0; r < num_repeats; ++r) {
             size_t batch_size = std::min(TRAVERSAL_BS, all_advs.size()-advs_idx);
@@ -288,7 +299,7 @@ void iterative_traverse(
                 advs_idx++;
             }
 
-            auto logits = player_net->forward(
+            auto logits = models[player]->forward(
                 batched_hands.slice(0,0,batch_size).to(gpu_device),
                 batched_flops.slice(0,0,batch_size).to(gpu_device),
                 batched_turns.slice(0,0,batch_size).to(gpu_device),
@@ -328,7 +339,6 @@ void iterative_traverse(
 
             // Calculate advantages
             std::array<double, NUM_ACTIONS> adv_values;
-        
             for (size_t a = 0; a < NUM_ACTIONS; ++a) {
                 if (!terminal_adv->is_illegal[a]) {
                     double ad = terminal_adv->values[a] - ev;
@@ -341,6 +351,7 @@ void iterative_traverse(
             safe_add_advantage(player, TraverseAdvantage{terminal_adv->state, t, adv_values}, rng);
 
             if (terminal_adv->parent.expired()) {
+                // Handle case where parent no longer exists
                 continue;
             }
 
@@ -381,28 +392,9 @@ int main() {
     std::filesystem::create_directories(run_dir);
     std::string logfile = run_dir + "/train.log";
     std::string const_log_filename = run_dir + "/const.log";
-
+    std::filesystem::path current_path = run_dir;
     init_constants_log(const_log_filename);
-
-    std::vector<std::array<DeepCFRModel, NUM_PLAYERS>> nets(NUM_THREADS);
-    DEBUG_NONE("NUM_PLAYERS = " << NUM_PLAYERS);
-    for (size_t i=0; i<NUM_THREADS; ++i) {
-        for (size_t j=0; j<NUM_PLAYERS; ++j) {
-            DeepCFRModel model;
-            nets[i][j] = model;
-            if (nets[i][j].get() == nullptr) DEBUG_NONE("null ptr at init");
-        }
-    }
-    {
-        DeepCFRModel model;
-        int64_t total_params = 0;
-        for (const auto& p : model->parameters()) {
-            if (p.requires_grad()) {
-                total_params += p.numel();
-            }
-        }
-        DEBUG_NONE("Model params = " << total_params);
-    } 
+    
     int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;
     int remaining_traversals = NUM_TRAVERSALS % NUM_THREADS;
     DEBUG_WRITE(logfile, "Traversals per thread: " << traversals_per_thread);
@@ -418,12 +410,12 @@ int main() {
     double big_bet = 1.0;
     int starting_actor = 0;
 
-    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter, std::array<DeepCFRModel, NUM_PLAYERS>& nets) {
+    auto thread_func = [&](int traversals_per_thread, int thread_id, int player, int cfr_iter) {
         try {
             iterative_traverse(
                 thread_id,
                 player, 
-                nets, 
+                current_path, 
                 cfr_iter, 
                 traversals_per_thread,
                 starting_stacks, 
@@ -452,17 +444,16 @@ int main() {
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
         for (int player=0; player<NUM_PLAYERS; ++player) {
+            // init threads
             std::vector<std::thread> threads;
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
                 
-                // Create a reference to nets[thread_id]
-                std::array<DeepCFRModel, NUM_PLAYERS>& thread_nets = nets[thread_id];
-                
+                DEBUG_NONE("spawning thread");
                 // Capture thread_nets by reference
                 threads.emplace_back(
-                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter, &thread_nets]() {
-                        thread_func(traversals_to_run, thread_id, player, cfr_iter, thread_nets);
+                    [&thread_func, traversals_to_run, thread_id, player, cfr_iter]() {
+                        thread_func(traversals_to_run, thread_id, player, cfr_iter);
                     }
                 );
             } 
@@ -473,14 +464,14 @@ int main() {
                 }
             }
 
-
             // fresh net to train
             DeepCFRModel train_net;
             train_net->to(gpu_device);
+            train_net->train();
             DEBUG_NONE("CFR ITER = " << cfr_iter);
             DEBUG_WRITE(logfile, "CFR ITER = " << cfr_iter);
             DEBUG_NONE("COLLECTED ADVS = " << cfr_iter_advs.load());
-            DEBUG_WRITE(logfile, "PLAYER COLLECTED ADVS = " << total_advs[player].load());
+            DEBUG_WRITE(logfile, "COLLECTED ADVS = " << total_advs[player].load());
             DEBUG_NONE("PLAYER = " << player);
             std::random_device rd;
             std::mt19937 rng(rd());
@@ -489,25 +480,23 @@ int main() {
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             if (train_bs == 0) continue;
             cfr_iter_advs.store(0, std::memory_order_seq_cst);
-                        // Add at the top of file
-            const size_t POOL_SIZE = train_bs * 4; // Size of rotating pool
-            std::vector<size_t> pool(POOL_SIZE);
-            std::iota(pool.begin(), pool.end(), 0);
-            std::shuffle(pool.begin(), pool.end(), rng);
-            size_t window_start = 0;
+            size_t total_advs_player = total_advs[player].load();
+
+             // Build weights vector
+            std::vector<double> weights(total_advs_player);
+            for (size_t i = 0; i < total_advs_player; ++i) {
+                weights[i] = static_cast<double>(global_player_advs[player][i].iteration);
+            }
+
+            // Create discrete distribution for weighted sampling
+            std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
             torch::optim::Adam optimizer(train_net->parameters(), torch::optim::AdamOptions(0.001));
             // Inside the training loop
             for (size_t train_iter = 0; train_iter < TRAIN_ITERS; ++train_iter) {
-                // Rotate and shuffle window
-                std::rotate(pool.begin(), 
-                        pool.begin() + window_start, 
-                        pool.begin() + window_start + train_bs);
-                std::shuffle(pool.begin(), pool.begin() + train_bs, rng);
-                
-                window_start = (window_start + train_bs) % POOL_SIZE;
-
                 for (size_t i = 0; i < train_bs; ++i) {
-                    State S = global_player_advs[player][pool[i]].state;
+                    size_t idx = dist(rng);
+
+                    State S = global_player_advs[player][idx].state;
                     update_tensors(
                         S, 
                         batched_hands, 
@@ -520,9 +509,9 @@ int main() {
                     ); 
 
                     for (size_t a = 0; a < NUM_ACTIONS; ++a) {
-                        batched_advs_a[i][a] = global_player_advs[player][pool[i]].advantages[a];
+                        batched_advs_a[i][a] = global_player_advs[player][idx].advantages[a];
                     }
-                    int iteration = global_player_advs[player][pool[i]].iteration;
+                    int iteration = global_player_advs[player][idx].iteration;
                     batched_iters_a[i][0] = static_cast<int>(iteration);
                 }
 
@@ -535,10 +524,10 @@ int main() {
                     batched_status.slice(0, 0, train_bs).to(gpu_device)
                 );
 
-                auto loss = torch::nn::functional::mse_loss(
+                auto loss = torch::nn::functional::smooth_l1_loss(
                     pred, 
                     batched_advs.slice(0, 0, train_bs).to(gpu_device),
-                    torch::nn::functional::MSELossFuncOptions().reduction(torch::kMean)
+                    torch::nn::functional::SmoothL1LossFuncOptions().reduction(torch::kMean)
                 );
 
                 loss.backward();
@@ -547,9 +536,7 @@ int main() {
                 DEBUG_NONE("ITER: " << train_iter << "/" << TRAIN_ITERS << " LOSS: " << loss.to(cpu_device).item());            
             }
 
-            std::filesystem::path current_path = run_dir;
             std::string save_path = (current_path / std::to_string(cfr_iter) / std::to_string(player) / "model.pt").string();
-
             std::filesystem::create_directories(std::filesystem::path(save_path).parent_path());
             train_net->to(cpu_device);
             torch::save(train_net, save_path);
@@ -562,18 +549,6 @@ int main() {
                 DEBUG_NONE("File was not created at " << save_path);
                 throw std::runtime_error("");
             }
-
-            // todo replace nets with trained nets
-            // create array of length cfr_iter, fill it with values
-            for (size_t i=0; i<NUM_THREADS; ++i) {
-                DeepCFRModel model;
-                int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter));
-                std::string iter_model_path = (current_path / std::to_string(sampled_iter) / std::to_string(player) / "model.pt").string();
-                torch::load(model, iter_model_path);
-                model->to(cpu_device); // default to cpu
-                nets[i][player] = model;
-            }
-            DEBUG_NONE("loaded trained nets into nets");
         }
     }
 }

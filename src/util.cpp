@@ -45,50 +45,35 @@ void update_tensors(
     }
 }
 
-int sample_iter(size_t iter) {
-    // compute softmax
-    double sum;
-    for (int i = 1; i <= iter; ++i) {
-        sum += exp(i);
+int sample_iter(size_t max_iter) {
+    if (max_iter == 0) {
+        return 0;
     }
-
-    std::vector<double> softmax_iters{};
-    softmax_iters.resize(iter);
-
-    for (int i = 1; i <= iter; ++i) {
-        softmax_iters[i] = exp(i)/sum;
+    
+    thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(1, static_cast<int>(max_iter));
+    
+    try {
+        return dist(rng);
+    } catch (const std::exception& e) {
+        std::cerr << "Error in sample_iter: " << e.what() << " max_iter: " << max_iter << std::endl;
+        return 1;  // Return safe default
     }
-
-    // sample
-    double r = static_cast<double>(rand()) / RAND_MAX;
-    double cumulative = 0.0;
-    for (int i = 1; i <= iter; ++i) {
-        DEBUG_INFO("softmax_iters " << i << " has p=" << strat[i]);
-        cumulative += softmax_iters[i];
-        if (r <= cumulative) {
-            DEBUG_INFO("returning " << i);
-            return i;
-        }
-    }
-
-    return softmax_iters[softmax_iters.size()-1];
 }
 
 // Sample an action according to the strategy probabilities
 int sample_action(const std::array<double, NUM_ACTIONS>& strat) {
-    double r = static_cast<double>(rand()) / RAND_MAX;
+    thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    double r = dist(rng); // Thread-safe random number between 0 and 1
     double cumulative = 0.0;
-    DEBUG_INFO("r is " << r);
-    for (int i = 0; i < NUM_ACTIONS; ++i) {
-        DEBUG_INFO("strat " << i << " has p=" << strat[i]);
+    for (size_t i = 0; i < strat.size(); ++i) {
         cumulative += strat[i];
         if (r <= cumulative) {
-            DEBUG_INFO("returning " << i);
-            return i;
+            return static_cast<int>(i);
         }
     }
-    DEBUG_INFO("returning " << (NUM_ACTIONS - 1));
-    return NUM_ACTIONS - 1; // Return last valid action if none selected
+    return static_cast<int>(strat.size() - 1);
 }
 
 void take_action(PokerEngine* engine, int player, int act) {
