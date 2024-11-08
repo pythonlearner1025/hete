@@ -15,6 +15,9 @@
 #include <cmath>
 #include <sstream> 
 #include <memory>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <ATen/cuda/PinnedMemoryAllocator.h>
 
 struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
@@ -28,6 +31,7 @@ torch::Device cpu_device(torch::kCPU);
 torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
 
+at::cuda::CUDAGuard device_guard(0);
 
 void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
     std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
@@ -195,70 +199,6 @@ void init_constants_log(std::string constant_log_file) {
     }
 }
 
-void gpu_update_tensors(
-    const State S, 
-    torch::Tensor hand_cpu, 
-    torch::Tensor flop_cpu, 
-    torch::Tensor turn_cpu, 
-    torch::Tensor river_cpu, 
-    torch::Tensor bet_fracs_cpu, 
-    torch::Tensor bet_status_cpu,
-    torch::Tensor hand, 
-    torch::Tensor flop, 
-    torch::Tensor turn, 
-    torch::Tensor river, 
-    torch::Tensor bet_fracs, 
-    torch::Tensor bet_status,
-    int batch 
-) {
-    // Fill CPU tensors using accessors
-    auto hand_a = hand_cpu.accessor<int32_t, 2>();
-    auto flop_a = flop_cpu.accessor<int32_t, 2>();
-    auto turn_a = turn_cpu.accessor<int32_t, 2>();
-    auto river_a = river_cpu.accessor<int32_t, 2>();
-    auto bet_fracs_a = bet_fracs_cpu.accessor<float, 2>();
-    auto bet_status_a = bet_status_cpu.accessor<float, 2>();
-
-    // Update hand cards
-    for (int i = 0; i < 2; ++i) {
-        hand_a[0][i] = S.hand[i];
-    }
-
-    // Update flop cards
-    for (int i = 0; i < 3; ++i) {
-        flop_a[0][i] = S.flop[i];
-    }
-
-    // Update turn card
-    turn_a[0][0] = S.turn[0];
-
-    // Update river card
-    river_a[0][0] = S.river[0];
-
-    // Update bet fractions
-    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_a[0][i] = S.bet_fracs[i];
-        bet_status_a[0][i] = S.bet_status[i];
-    }
-
-    // Copy to GPU if needed, then copy to the correct batch index
-    if (hand.device().is_cuda()) {
-        hand.index_put_({batch}, hand_cpu.to(hand.device()));
-        flop.index_put_({batch}, flop_cpu.to(flop.device()));
-        turn.index_put_({batch}, turn_cpu.to(turn.device()));
-        river.index_put_({batch}, river_cpu.to(river.device()));
-        bet_fracs.index_put_({batch}, bet_fracs_cpu.to(bet_fracs.device()));
-        bet_status.index_put_({batch}, bet_status_cpu.to(bet_status.device()));
-    } else {
-        // If on CPU, copy directly
-        hand.index_put_({batch}, hand_cpu);
-        flop.index_put_({batch}, flop_cpu);
-        turn.index_put_({batch}, turn_cpu);
-        river.index_put_({batch}, river_cpu);
-        bet_fracs.index_put_({batch}, bet_fracs_cpu);
-        bet_status.index_put_({batch}, bet_status_cpu);
-    }
-}
 void outcome_sampling(
     int thread_id,
     int player, 
@@ -274,12 +214,6 @@ void outcome_sampling(
 ) {
     // Initialize RNG
     thread_local std::mt19937 rng(std::random_device{}());
-    torch::Tensor hand_cpu = init_batched_hands(1).to(cpu_device);
-    torch::Tensor flop_cpu = init_batched_flops(1).to(cpu_device);
-    torch::Tensor turn_cpu = init_batched_turns(1).to(cpu_device);
-    torch::Tensor river_cpu = init_batched_rivers(1).to(cpu_device);
-    torch::Tensor bet_fracs_cpu = init_batched_fracs(1).to(cpu_device);
-    torch::Tensor bet_status_cpu = init_batched_status(1).to(cpu_device);
     torch::Tensor hand = init_batched_hands(1).to(gpu_device);
     torch::Tensor flop = init_batched_flops(1).to(gpu_device);
     torch::Tensor turn = init_batched_turns(1).to(gpu_device);
@@ -351,23 +285,9 @@ void outcome_sampling(
                 // Prepare tensors for input
                 //auto start = std::chrono::high_resolution_clock::now();
 
-                gpu_update_tensors(state, hand_cpu, flop_cpu, turn_cpu, river_cpu, bet_fracs_cpu, bet_status_cpu, hand, flop, turn, river, bet_fracs, bet_status, 0);
-                //auto end = std::chrono::high_resolution_clock::now();
-                //auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                //DEBUG_NONE("update tensor time=" << duration.count() << "us");
+                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
 
-                // Get the model output
-                //start = std::chrono::high_resolution_clock::now();
-                auto logits_gpu = model->forward(hand, flop, turn, river, bet_fracs, bet_status);
-                //end = std::chrono::high_resolution_clock::now();
-                //duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                //DEBUG_NONE("forward time=" << duration.count() << "us");
-
-                //start = std::chrono::high_resolution_clock::now();
-                auto logits_cpu = logits_gpu.to(cpu_device);
-                //end = std::chrono::high_resolution_clock::now();
-                //duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-                //DEBUG_NONE("gpu->cpu time=" << duration.count() << "us");
+                auto logits_cpu = model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
 
                 if (t % 100 == 0) {
                     DEBUG_WRITE(logfile, "logits=" << format_tensor(logits_cpu));
@@ -447,18 +367,16 @@ void outcome_sampling(
                 State state;
                 get_state(engine, &state, current_player);
 
-                gpu_update_tensors(state, hand_cpu, flop_cpu, turn_cpu, river_cpu, bet_fracs_cpu, bet_status_cpu, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
                 //update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
-
                 // Get the model output
-                auto logits = model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
+                auto logits_cpu = model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
 
                 // Convert logits to strategy using regret matching
-                std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
+                std::array<double, NUM_ACTIONS> strategy = regret_match(logits_cpu[0]);
 
                 // Sample an action according to the strategy
                 int action = sample_action(strategy);
-
                 // Compute sigma(a|I)
                 double sigma = strategy[action];
 
@@ -481,6 +399,207 @@ void outcome_sampling(
         // Start traversal
         double u = cfr(engine, player, engine.turn(), 1.0, 1.0, 1.0, 0);
     }
+}
+
+template<typename F>
+auto time_section(
+    const std::string& name, 
+    std::unordered_map<std::string, double>& timers, 
+    std::unordered_map<std::string, size_t>& counters, 
+    F&& func
+    ) -> decltype(func()) {
+    auto start = std::chrono::steady_clock::now();
+    if constexpr (std::is_void_v<decltype(func())>) {
+        func();
+        auto end = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        DEBUG_NONE(name << " took " << us << " us");
+        timers[name] += us;
+        counters[name]++;
+    } else {
+        auto result = func();
+        auto end = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        DEBUG_NONE(name << " took " << us << " us");
+        timers[name] += us;
+        counters[name]++;
+        return result;
+    }
+}
+
+void profile_outcome_sampling(
+    int thread_id,
+    int player, 
+    std::filesystem::path model_path, 
+    int cfr_iter, 
+    int traversals,
+    std::array<double, NUM_PLAYERS> starting_stacks, 
+    std::array<double, NUM_PLAYERS> antes,
+    int starting_actor,
+    double small_bet, 
+    double big_bet,
+    std::string logfile
+) {
+    auto total_start = std::chrono::steady_clock::now();
+    std::unordered_map<std::string, double> timers;
+    std::unordered_map<std::string, size_t> counters;
+
+    auto log_perf = [&]() {
+        DEBUG_NONE("\nPerformance breakdown for thread " << thread_id << ":");
+        for (const auto& [name, time] : timers) {
+            size_t count = counters[name];
+            DEBUG_NONE(name << ": total=" << time/1000.0 << "us, count=" << count 
+                      << ", avg=" << (count > 0 ? time/1000.0/count : 0) << "ms");
+        }
+    };
+
+    thread_local std::mt19937 rng(std::random_device{}());
+    torch::Tensor hand = init_batched_hands(1);
+    torch::Tensor flop = init_batched_flops(1);
+    torch::Tensor turn = init_batched_turns(1);
+    torch::Tensor river = init_batched_rivers(1);
+    torch::Tensor bet_fracs = init_batched_fracs(1);
+    torch::Tensor bet_status = init_batched_status(1);
+
+    std::map<std::tuple<int, int>, DeepCFRModel> cache;
+    
+    for (int t = 0; t < traversals; ++t) {
+        DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal="<<t
+                    <<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
+
+        // Initialize models
+        std::array<DeepCFRModel, NUM_PLAYERS> models;
+        time_section("model_init", timers, counters, [&]() {
+            for (int p = 0; p < NUM_PLAYERS; ++p) {
+                if (cfr_iter>1) {
+                    int sampled_iter = sample_iter(static_cast<size_t>(cfr_iter-1));
+                    auto key = std::tuple(p, sampled_iter);
+                    if (cache.find(key) == cache.end()) {
+                        auto path = model_path / std::to_string(sampled_iter) / std::to_string(p) / "model.pt";
+                        models[p] = DeepCFRModel();
+                        torch::load(models[p], path);
+                        models[p]->to(gpu_device);
+                        models[p]->eval();
+                        cache[key] = models[p];
+                    } else {
+                        models[p] = cache[key];
+                    }
+                } else {
+                    models[p]->to(gpu_device);
+                }
+            }
+            return models;
+        });
+
+        auto engine = time_section("engine_init", timers, counters, [&]() {
+            return PokerEngine(starting_stacks, antes, starting_actor, small_bet, big_bet, false);
+        });
+
+        std::function<double(PokerEngine&, int, int, double, double, double, int)> cfr;
+        cfr = [&](PokerEngine& engine, int traversing_player, int current_player, 
+                 double pi_sigma_i, double pi_sigma_minus_i, double pi_sigma_prime, int depth) -> double {
+            
+            if (!engine.get_game_status()) {
+                return time_section("terminal_payoff", timers, counters, [&]() {
+                    return engine.get_payoffs()[traversing_player];
+                });
+            }
+
+            if (current_player == traversing_player) {
+                return time_section("traversing_player_turn", timers, counters, [&]() {
+                    State state;
+                    time_section("get_state", timers, counters, [&]() {
+                        get_state(engine, &state, traversing_player);
+                    });
+
+                    auto model = models[traversing_player];
+                    
+                    time_section("update_tensors", timers, counters, [&]() {
+                        update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                    });
+
+                    auto logits = time_section("forward_pass", timers, counters, [&]() {
+                        try {
+                            return model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
+                        } catch (const std::exception& e) {
+                            std::cerr << "forward failed: " << e.what() << std::endl;
+                            throw;
+                        }
+                    });
+
+                    auto strategy = time_section("strategy_compute", timers, counters, [&]() {
+                        return regret_match(logits[0]);
+                    });
+
+                    auto [action, sigma_prime] = time_section("action_selection", timers, counters, [&]() {
+                        std::array<double, NUM_ACTIONS> sampling_strategy;
+                        for (int a = 0; a < NUM_ACTIONS; ++a) {
+                            sampling_strategy[a] = (1.0 - EPSILON) * strategy[a] + EPSILON / NUM_ACTIONS;
+                        }
+                        sampling_strategy = normalize_to_prob_dist(sampling_strategy);
+                        int action = sample_action(sampling_strategy);
+                        return std::make_pair(action, sampling_strategy[action]);
+                    });
+
+                    time_section("take_action", timers, counters, [&]() {
+                        take_action(&engine, current_player, action);
+                    });
+
+                    double new_pi_sigma_prime = pi_sigma_prime * sigma_prime;
+                    double sigma_i = strategy[action];
+                    double new_pi_sigma_i = pi_sigma_i * sigma_i;
+                    int next_player = engine.turn();
+
+                    double u = cfr(engine, traversing_player, next_player, new_pi_sigma_i, 
+                                 pi_sigma_minus_i, new_pi_sigma_prime, depth + 1);
+
+                    time_section("compute_advantages", timers, counters, [&]() {
+                        double w_I = u * (pi_sigma_i / pi_sigma_prime);
+                        auto cum_regrets = 0.0;
+                        std::array<double, NUM_ACTIONS> regrets;
+                        for (int a = 0; a < NUM_ACTIONS; ++a) {
+                            regrets[a] = (a == action) ? 
+                                w_I * (1.0 - strategy[a]) : -w_I * strategy[a];
+                            cum_regrets += std::abs(regrets[a]);
+                        }
+
+                        if (cum_regrets >= 1e-3) {
+                            TraverseAdvantage adv{state, cfr_iter, regrets};
+                            safe_add_advantage(traversing_player, adv, rng);
+                        }
+                    });
+
+                    return u;
+                });
+            } else {
+                return time_section("opponent_turn", timers, counters, [&]() {
+                    auto model = models[current_player];
+                    State state;
+                    get_state(engine, &state, current_player);
+                    update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                    
+                    auto logits = model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
+                    auto strategy = regret_match(logits[0]);
+                    int action = sample_action(strategy);
+                    double sigma = strategy[action];
+                    double new_pi_sigma_minus_i = pi_sigma_minus_i * sigma;
+                    
+                    take_action(&engine, current_player, action);
+                    int next_player = engine.turn();
+                    
+                    return cfr(engine, traversing_player, next_player, pi_sigma_i, 
+                             new_pi_sigma_minus_i, pi_sigma_prime, depth + 1);
+                });
+            }
+        };
+
+        double u = cfr(engine, player, engine.turn(), 1.0, 1.0, 1.0, 0);
+    }
+
+    auto total_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - total_start).count();
+    DEBUG_NONE("\nTotal time for thread " << thread_id << ": " << total_time/1000.0 << "ms");
+    log_perf();
 }
 
 
@@ -562,6 +681,7 @@ int main() {
 
         for (int player=0; player<NUM_PLAYERS; ++player) {
             // init threads
+            auto start = std::chrono::steady_clock::now();
             std::vector<std::thread> threads;
             for (unsigned int thread_id = 0; thread_id < NUM_THREADS; ++thread_id) {
                 int traversals_to_run = traversals_per_thread + (thread_id < remaining_traversals ? 1 : 0);
@@ -581,6 +701,9 @@ int main() {
                 }
             }
 
+            auto end = std::chrono::steady_clock::now();
+            auto us = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+            DEBUG_NONE("took " << us << "s");
             // fresh net to train
             DeepCFRModel train_net;
             train_net->to(gpu_device);
@@ -641,6 +764,7 @@ int main() {
                 //auto transformed_advantages = batch_advantages.sign() * torch::log1p(batch_advantages.abs());
 
                 optimizer.zero_grad();
+
                 auto pred = train_net->forward(
                     batched_hands.slice(0, 0, train_bs),
                     batched_flops.slice(0, 0, train_bs),
