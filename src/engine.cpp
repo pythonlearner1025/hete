@@ -8,6 +8,10 @@
 #include <iostream>
 #include <cassert>
 
+// in engine.cpp:
+std::random_device PokerEngine::rd{};
+std::mt19937 PokerEngine::master_rng(rd());
+
 PokerEngine::PokerEngine(
     std::array<double, NUM_PLAYERS> starting_stacks, 
     std::array<double, NUM_PLAYERS> antes, 
@@ -24,7 +28,7 @@ PokerEngine::PokerEngine(
       pot(0.0),
       game_status(true),
       manual(manual),
-      rng(std::random_device{}())
+      rng(master_rng())
 {
     if (NUM_PLAYERS < 2 || NUM_PLAYERS > MAX_PLAYERS) {
         throw std::invalid_argument("Invalid number of players");
@@ -94,8 +98,6 @@ PokerEngine::PokerEngine(
 
         std::array<int, 52> full_deck;
         std::iota(full_deck.begin(), full_deck.end(), 0);
-        std::random_device rd;
-        std::mt19937 rng(rd());
         std::shuffle(full_deck.begin(), full_deck.end(), rng);
 
         // Deal cards to players
@@ -103,12 +105,6 @@ PokerEngine::PokerEngine(
         for (size_t player = 0; player < NUM_PLAYERS; ++player) {
             int card1 = full_deck[card_index++];
             int card2 = full_deck[card_index++];
-            /*
-            std::string user_input;
-            std::getline(std::cin, user_input);
-            DEBUG_INFO("card1: " << card1 << " card2: " << card2);
-            */
-
             this->players[player].hand[0] = card1;
             this->players[player].hand[1] = card2;
         }
@@ -123,6 +119,7 @@ PokerEngine::PokerEngine(
         }
     }
 }
+
 
 void PokerEngine::reset_actions() {
     for (size_t i=0; i<NUM_PLAYERS; ++i) {
@@ -495,7 +492,6 @@ double PokerEngine::get_current_max_bet() const {
 }
 
 bool PokerEngine::is_round_complete() const {
-
     // if even one alive player hasn't acted, round isn't complete
     for (size_t i = 0; i < NUM_PLAYERS; ++i) {
         const auto& player = this->players[i];
@@ -506,7 +502,6 @@ bool PokerEngine::is_round_complete() const {
         DEBUG_INFO("Player " << i << ": Status = " << static_cast<int>(player.status) 
                  << ", Acted = " << (player.acted ? "true" : "false"));
     }
-
     return true;
 }
 
@@ -573,7 +568,6 @@ void PokerEngine::next_state() {
         }
     }
 }
-
 
 /*
     case 1: round 4 ended
@@ -724,7 +718,6 @@ void PokerEngine::showdown() {
     DEBUG_INFO("Game status set to false");
 }
 
-
 /* PUBLIC VERIFICATIONS  */
 
 bool PokerEngine::should_force_check_or_call() const {
@@ -768,7 +761,10 @@ std::pair<std::array<int, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, 
         for (uint b = 0; b < MAX_ROUND_BETS * NUM_PLAYERS; ++b) {
             uint p = b % NUM_PLAYERS; 
             uint n_bet = static_cast<uint>(std::floor(static_cast<double>(b) / NUM_PLAYERS));
-
+            // ex
+            // round 0 p 0 b 6 num_bets 3 n_bet 2
+            // made 3 bets already 
+            // p1 b10 p2 b15 p1 b20 p2 b30 p1 b40 p2 b50 
             int num_bets = 0;
             for (int i=0; i<MAX_ROUND_BETS; ++i) {
                 if (this->players[p].bets_per_round[r][i] >= 0) num_bets++;
@@ -777,6 +773,7 @@ std::pair<std::array<int, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, 
                 continue;
             }
             if (n_bet < num_bets) {
+                // idx into 3rd bet
                 double bet_amount = this->players[p].bets_per_round[r][n_bet]; 
 
                 bet_status[b] = (bet_amount > 0.0) ? 1 : 0;
@@ -789,8 +786,6 @@ std::pair<std::array<int, NUM_PLAYERS * 4 * MAX_ROUND_BETS>, std::array<double, 
 
     return std::make_pair(bet_status, bet_fracs);
 }
-
-/* MANUAL MODE */
 
 // Manual Dealing: Assign a Specific Hand to a Player
 void PokerEngine::manual_deal_hand(int player, std::array<int, 2> hand) {
@@ -873,7 +868,7 @@ PokerEngine::PokerEngine(const PokerEngine& other)
       game_status(other.game_status),
       manual(other.manual),
       // Initialize rng separately
-      rng(std::random_device{}()),
+      rng(master_rng()),
       board(other.board),
       players(other.players),
       deck(other.deck),

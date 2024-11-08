@@ -8,13 +8,46 @@
 #include <algorithm>
 #include <cmath>
 
+struct BetHistory {
+    // nx4xMAX_ROUND_BETS where n=NUM_PLAYERS
+    std::array<std::array<std::array<double, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> amounts;
+    std::array<std::array<std::array<bool, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> status;
+
+    // helper to create pre-flattened torch tensors 
+    std::pair<torch::Tensor, torch::Tensor> to_tensors() const {
+        auto options = torch::TensorOptions().dtype(torch::kFloat32);
+        
+        // create contiguous tensors with right shape
+        auto amounts_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
+        auto status_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
+
+        // fill tensors (they're contiguous in memory)
+        auto amounts_acc = amounts_tensor.accessor<float,3>();
+        auto status_acc = status_tensor.accessor<float,3>();
+        
+        for(int r = 0; r < 4; r++) {
+            for(int p = 0; p < NUM_PLAYERS; p++) {
+                for(int b = 0; b < MAX_ROUND_BETS; b++) {
+                    amounts_acc[r][p][b] = amounts[r][p][b];
+                    status_acc[r][p][b] = status[r][p][b];
+                }
+            }
+        }
+
+        // flatten preserving memory layout
+        return {amounts_tensor.flatten(), status_tensor.flatten()};
+    }
+};
+
+BetHistory construct_history(PokerEngine& engine);
+
 struct State {
     std::array<int, 2> hand{};
     std::array<int, 3> flop{};
     std::array<int, 1> turn{};
     std::array<int, 1> river{};
-    std::array<double, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_fracs{};
-    std::array<int, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_status{};
+    torch::Tensor bet_fracs{};
+    torch::Tensor bet_status{};
 };
 
 void update_tensors(

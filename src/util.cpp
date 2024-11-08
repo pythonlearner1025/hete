@@ -1,5 +1,23 @@
 #include "util.h"
 
+BetHistory construct_history(PokerEngine& engine) {
+    BetHistory hist;
+    double pot = engine.small_blind + engine.big_blind;
+    
+    for(int r = 0; r < 4; r++) {
+        for(int p = 0; p < NUM_PLAYERS; p++) {
+            for(int b = 0; b < MAX_ROUND_BETS; b++) {
+                if(engine.players[p].bets_per_round[r][b] >= 0) {
+                    hist.amounts[r][p][b] = engine.players[p].bets_per_round[r][b] / pot;
+                    hist.status[r][p][b] = engine.players[p].bets_per_round[r][b] > 0;
+                    pot += engine.players[p].bets_per_round[r][b];
+                }
+            }
+        }
+    }
+    return hist;
+}
+
 void update_tensors(
     const State S, 
     torch::Tensor hand, 
@@ -10,21 +28,12 @@ void update_tensors(
     torch::Tensor bet_status,
     int batch 
 ) {
-    // Create CPU tensors to stage the data
-    auto hand_cpu = torch::empty({1, 2}, torch::kInt32);
-    auto flop_cpu = torch::empty({1, 3}, torch::kInt32);
-    auto turn_cpu = torch::empty({1, 1}, torch::kInt32);
-    auto river_cpu = torch::empty({1, 1}, torch::kInt32);
-    auto bet_fracs_cpu = torch::empty({1, NUM_PLAYERS*MAX_ROUND_BETS*4}, torch::kFloat32);
-    auto bet_status_cpu = torch::empty({1, NUM_PLAYERS*MAX_ROUND_BETS*4}, torch::kFloat32);
 
     // Fill CPU tensors using accessors
-    auto hand_a = hand_cpu.accessor<int32_t, 2>();
-    auto flop_a = flop_cpu.accessor<int32_t, 2>();
-    auto turn_a = turn_cpu.accessor<int32_t, 2>();
-    auto river_a = river_cpu.accessor<int32_t, 2>();
-    auto bet_fracs_a = bet_fracs_cpu.accessor<float, 2>();
-    auto bet_status_a = bet_status_cpu.accessor<float, 2>();
+    auto hand_a = hand.accessor<int32_t, 2>();
+    auto flop_a = flop.accessor<int32_t, 2>();
+    auto turn_a = turn.accessor<int32_t, 2>();
+    auto river_a = river.accessor<int32_t, 2>();
 
     // Update hand cards
     for (int i = 0; i < 2; ++i) {
@@ -42,29 +51,8 @@ void update_tensors(
     // Update river card
     river_a[0][0] = S.river[0];
 
-    // Update bet fractions
-    for (int i = 0; i < NUM_PLAYERS*MAX_ROUND_BETS*4; ++i) {
-        bet_fracs_a[0][i] = S.bet_fracs[i];
-        bet_status_a[0][i] = S.bet_status[i];
-    }
-
-    // Copy to GPU if needed, then copy to the correct batch index
-    if (hand.device().is_cuda()) {
-        hand.index_put_({batch}, hand_cpu.to(hand.device()));
-        flop.index_put_({batch}, flop_cpu.to(flop.device()));
-        turn.index_put_({batch}, turn_cpu.to(turn.device()));
-        river.index_put_({batch}, river_cpu.to(river.device()));
-        bet_fracs.index_put_({batch}, bet_fracs_cpu.to(bet_fracs.device()));
-        bet_status.index_put_({batch}, bet_status_cpu.to(bet_status.device()));
-    } else {
-        // If on CPU, copy directly
-        hand.index_put_({batch}, hand_cpu);
-        flop.index_put_({batch}, flop_cpu);
-        turn.index_put_({batch}, turn_cpu);
-        river.index_put_({batch}, river_cpu);
-        bet_fracs.index_put_({batch}, bet_fracs_cpu);
-        bet_status.index_put_({batch}, bet_status_cpu);
-    }
+    bet_fracs = S.bet_fracs;
+    bet_status = S.bet_status;
 }
 
 float sample_uniform() {
@@ -147,15 +135,13 @@ void get_state(
     State* state,
     int player
 ) {
-    auto history = game.construct_history();
+    auto history = construct_history(game);
     std::array<int, 2> hand = game.players[player].hand;
     std::array<int, 5> board = game.get_board();
 
-    // Copy the bet_status and bet_fracs from history to state
-    for (size_t i = 0; i < NUM_PLAYERS * MAX_ROUND_BETS * 4; ++i) {
-        state->bet_status[i] = history.first[i];
-        state->bet_fracs[i] = history.second[i];
-    }
+    auto [bet_fracs, bet_status] = history.to_tensors();
+    state->bet_fracs = bet_fracs;
+    state->bet_status = bet_status;
 
     // Assign hand, flop, turn, and river
     state->hand = hand;
