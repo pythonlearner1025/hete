@@ -40,9 +40,10 @@ public:
     // action verification functions
     bool can_fold(int player) const;
     bool can_check_or_call(int player) const;
-    bool can_bet_or_raise(int player, double amount) const;
+    bool can_bet_or_raise(int player, double amount, std::string logfile) const; 
 
     // Actions
+    void all_in(int player);
     void fold(int player);
     void bet_or_raise(int player, double amount);
     void check_or_call(int player);

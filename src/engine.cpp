@@ -147,11 +147,36 @@ void PokerEngine::fold(int player) {
     next_state();
 }
 
-bool PokerEngine::can_bet_or_raise(int player, double amount) const {
+bool PokerEngine::can_bet_or_raise( int player, double amount, std::string logfile = "") const {
     bool ret = verify_sufficient_funds(player, amount);
-    DEBUG_INFO("can player " << player << " bet or raise " << amount);
-    DEBUG_INFO("answer: " << ret);
+    if (logfile != "") {
+        DEBUG_WRITE(logfile, "player funds: " << players[player].stack << "player bet_amt" << amount);
+        DEBUG_WRITE(logfile, "player can raise:" << ret);   
+    }
     return ret;
+}
+
+void PokerEngine::all_in(int player) {
+    if (player != this->actor) {
+        throw std::runtime_error("Player mismatch: betting player " + std::to_string(player + 1) + " is not the current actor " + std::to_string(this->actor+1));
+    }
+
+    if (should_force_check_or_call()){
+        check_or_call(player);
+        return;
+    }
+
+    //DEBUG_NONE("player " << player << " goes all in, makes side pot");
+    double bet_amount = this->players[player].stack;
+    this->players[player].stack = 0.0;
+    this->players[player].total_bet += bet_amount;
+    this->players[player].bets_per_round[this->round][bet_idx] = bet_amount;
+    this->pot += bet_amount;
+    this->players[player].status = PlayerStatus::AllIn;
+    reset_actions();
+    this->players[this->actor].acted = true;
+    next_state();
+    return; 
 }
 
 // side pot:
@@ -174,8 +199,9 @@ void PokerEngine::bet_or_raise(int player, double amount) {
     for (int b=0; b<MAX_ROUND_BETS; ++b) {
         if (this->players[player].bets_per_round[this->round][b] >= 0) bet_idx++;
     }
+
     if (!verify_sufficient_funds(player, min_bet_amt) && amount == this->players[player].stack) {
-        DEBUG_INFO("player " << player << " goes all in, makes side pot");
+        DEBUG_NONE("player " << player << " goes all in, makes side pot");
         double bet_amount = this->players[player].stack;
         this->players[player].stack = 0.0;
         this->players[player].total_bet += bet_amount;

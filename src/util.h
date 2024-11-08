@@ -9,19 +9,29 @@
 #include <cmath>
 
 struct BetHistory {
-    // nx4xMAX_ROUND_BETS where n=NUM_PLAYERS
     std::array<std::array<std::array<double, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> amounts;
     std::array<std::array<std::array<bool, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> status;
 
-    // helper to create pre-flattened torch tensors 
+    BetHistory() {
+        // zero init all arrays
+        for(auto& r : amounts) {
+            for(auto& p : r) {
+                p.fill(0.0);
+            }
+        }
+        for(auto& r : status) {
+            for(auto& p : r) {
+                p.fill(false);
+            }
+        }
+    }
+
     std::pair<torch::Tensor, torch::Tensor> to_tensors() const {
         auto options = torch::TensorOptions().dtype(torch::kFloat32);
         
-        // create contiguous tensors with right shape
         auto amounts_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
         auto status_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
 
-        // fill tensors (they're contiguous in memory)
         auto amounts_acc = amounts_tensor.accessor<float,3>();
         auto status_acc = status_tensor.accessor<float,3>();
         
@@ -29,13 +39,12 @@ struct BetHistory {
             for(int p = 0; p < NUM_PLAYERS; p++) {
                 for(int b = 0; b < MAX_ROUND_BETS; b++) {
                     amounts_acc[r][p][b] = amounts[r][p][b];
-                    status_acc[r][p][b] = status[r][p][b];
+                    status_acc[r][p][b] = status[r][p][b] ? 1.0f : 0.0f; // explicit conversion
                 }
             }
         }
 
-        // flatten preserving memory layout
-        return {amounts_tensor.flatten(), status_tensor.flatten()};
+        return {amounts_tensor.flatten().unsqueeze(0), status_tensor.flatten().unsqueeze(0)};
     }
 };
 
@@ -56,8 +65,6 @@ void update_tensors(
     torch::Tensor flop, 
     torch::Tensor turn, 
     torch::Tensor river, 
-    torch::Tensor bet_fracs, 
-    torch::Tensor bet_status,
     int batch = 0 
 );
 
@@ -95,7 +102,7 @@ std::size_t argmax(const std::array<T, N>& arr) {
 int sample_action(const std::array<double, NUM_ACTIONS>& strat);
 int sample_iter(size_t iter);
 void take_action(PokerEngine* engine, int player, int act);
-bool verify_action(PokerEngine* engine, int player, int act);
+bool verify_action(PokerEngine* engine, int player, int act, std::string logfile);
 
 torch::Tensor regret_match_batched(const torch::Tensor& batched_logits);
 

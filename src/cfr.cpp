@@ -28,8 +28,6 @@ torch::Device cpu_device(torch::kCPU);
 torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
 
-at::cuda::CUDAGuard device_guard(0);
-
 void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
     std::lock_guard<std::mutex> lock(player_advs_mutex[player]);
     size_t current_total = total_advs[player].load();
@@ -215,15 +213,11 @@ void outcome_sampling(
     torch::Tensor flop = init_batched_flops(1);
     torch::Tensor turn = init_batched_turns(1);
     torch::Tensor river = init_batched_rivers(1);
-    torch::Tensor bet_fracs = init_batched_fracs(1);
-    torch::Tensor bet_status = init_batched_status(1);
 
     std::map<std::tuple<int, int>, DeepCFRModel> cache;
     // For each traversal
     for (int t = 0; t < traversals; ++t) {
-        if (t % 1 == 0) {
-            DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal= "<<t<<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
-        }
+        DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal= "<<t<<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
         // Initialize models for each player
         std::array<DeepCFRModel, NUM_PLAYERS> models;
         for (int p = 0; p < NUM_PLAYERS; ++p) {
@@ -258,7 +252,7 @@ void outcome_sampling(
 
         // Recursive CFR function
         std::function<double(PokerEngine&, int, int, double, double, double, int)> cfr;
-        cfr = [&](PokerEngine& engine, int traversing_player, int current_player, double pi_sigma_i, double pi_sigma_minus_i, double pi_sigma_prime, int depth) -> double {
+        cfr = [&](PokerEngine& engine, int traversing_player, int current_player, double player_reach, double opp_reach, double total_sampling_prob, int depth) -> double {
             // Base case: if terminal node
             if (!engine.get_game_status()) {
                 // Game is over
@@ -269,111 +263,181 @@ void outcome_sampling(
 
             // If current player is the traversing player
             if (current_player == traversing_player) {
-                // Get the information set (state)
-                State state;
-                get_state(engine, &state, traversing_player);
-                if (t % 100 == 0) {
+                try {
+                    // Get the information set (state)
+                    State state;
+                    get_state(engine, &state, traversing_player);
                     DEBUG_WRITE(logfile, "PLAYER TURN\n" << format_game_state(state));
-                }
 
-                auto model = models[traversing_player];
+                    auto model = models[traversing_player];
 
-                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                    update_tensors(state, hand, flop, turn, river, 0);
 
-                auto logits_gpu = model->forward(hand.to(gpu_device), flop.to(gpu_device), turn.to(gpu_device), river.to(gpu_device), bet_fracs.to(gpu_device), bet_status.to(gpu_device));
+                    auto logits = model->forward(hand, flop, turn, river, state.bet_fracs, state.bet_status);
 
-                auto logits_cpu = logits_gpu.to(cpu_device);
+                    std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
 
-                if (t % 100 == 0) {
-                    DEBUG_WRITE(logfile, "logits=" << format_tensor(logits_cpu));
-                }
+                    DEBUG_WRITE(logfile, "strat=" << format_array(strategy));
+                    // first check if we have any legal actions with non-zero strategy
+                    bool all_legal_actions_zero = true;
+                    int num_legal_actions = 0;
+                    for (int a = 0; a < NUM_ACTIONS; ++a) {
+                        if (verify_action(&engine, current_player, a, logfile)) {
+                            num_legal_actions++;
+                            if (strategy[a] > 0) {
+                                all_legal_actions_zero = false;
+                                break;
+                            }
+                        }
+                    }
 
-                std::array<double, NUM_ACTIONS> strategy = regret_match(logits_cpu[0]);
-
-                if (t % 100 == 0) {
-                    DEBUG_WRITE(logfile,"strategy="<<format_array(strategy));
-                }
-
-                std::array<double, NUM_ACTIONS> sampling_strategy;
-                for (int a = 0; a < NUM_ACTIONS; ++a) {
-                    sampling_strategy[a] = (1.0 - EPSILON) * strategy[a] + EPSILON / NUM_ACTIONS;
-                }
-
-                sampling_strategy = normalize_to_prob_dist(sampling_strategy);
-
-                int action = sample_action(sampling_strategy);
-
-                // Compute the sampling probability for the action
-                double sigma_prime = sampling_strategy[action];
-
-                // Update the sampling probability
-                double new_pi_sigma_prime = pi_sigma_prime * sigma_prime;
-
-                // Compute traversing player's reach probability under sigma
-                double sigma_i = strategy[action];
-                double new_pi_sigma_i = pi_sigma_i * sigma_i;
-
-                // Take the action in the engine
-                take_action(&engine, current_player, action);
-
-                // Get next player
-                int next_player = engine.turn();
-
-                double u = cfr(engine, traversing_player, next_player, new_pi_sigma_i, pi_sigma_minus_i, new_pi_sigma_prime, depth + 1);
-
-                double w_I = u * (pi_sigma_i / pi_sigma_prime);
-
-                // Compute the regrets for each action
-                auto cum_regrets = 0.0;
-                std::array<double, NUM_ACTIONS> regrets;
-                for (int a = 0; a < NUM_ACTIONS; ++a) {
-                    if (a == action) {
-                        regrets[a] = w_I * (1.0 - strategy[a]);
+                    std::array<double, NUM_ACTIONS> sampling_strategy{0.0};
+                    if (all_legal_actions_zero && num_legal_actions > 0) {
+                        // corner case: uniform over legal actions
+                        for (int a = 0; a < NUM_ACTIONS; ++a) {
+                            if (verify_action(&engine, current_player, a, logfile)) {
+                                sampling_strategy[a] = 1.0 / num_legal_actions;
+                                strategy[a] = sampling_strategy[a];  // keep consistent for regret calc
+                            }
+                        }
+                    } else if (num_legal_actions > 0) {
+                        // normal case: epsilon exploration over non-zero strat actions
+                        for (int a = 0; a < NUM_ACTIONS; ++a) {
+                            sampling_strategy[a] = (1.0 - EPSILON) * strategy[a] + EPSILON / NUM_ACTIONS;
+                            if (strategy[a] == 0) sampling_strategy[a] = 0;
+                        }
+                        sampling_strategy = normalize_to_prob_dist(sampling_strategy);
                     } else {
-                        regrets[a] = -w_I * strategy[a];
+                        DEBUG_NONE("EDGE CASE: no legal actions that aren't zero");
                     }
-                    cum_regrets += std::abs(regrets[a]);
-                }
 
-                if (cum_regrets >= 1e-3) {
-                    // Store the regrets (advantages) in the buffer
-                    TraverseAdvantage adv;
-                    adv.state = state;
-                    adv.advantages = regrets;
-                    adv.iteration = cfr_iter;
-                    if (t % 100 == 0) {
-                        DEBUG_WRITE(logfile, "advantages="<<format_array(regrets));
+                    int action = sample_action(sampling_strategy);
+
+                    while (!verify_action(&engine, current_player, action, logfile)) {
+                        DEBUG_WRITE(logfile, "invalid action=" << action << "trying next " << (action - 1 + NUM_ACTIONS) % NUM_ACTIONS);
+                        action = (action - 1 + NUM_ACTIONS) % NUM_ACTIONS;
                     }
-                    safe_add_advantage(traversing_player, adv, rng);
+
+                    DEBUG_WRITE(logfile, "action=" << action);
+
+                    DEBUG_WRITE(logfile, "pi_sigma_prime=" << total_sampling_prob);
+
+                    // Compute the sampling probability for the action
+                    double sampling_prob = sampling_strategy[action];
+                    if (sampling_prob == 0)  {
+                        DEBUG_NONE("this shouldn't happen");
+                        sampling_prob = 0.01;
+                    }
+                    DEBUG_WRITE(logfile, "sigma_prime=" << sampling_prob);
+                    DEBUG_WRITE(logfile, "pi_sigma_i=" << player_reach);
+
+                    // update the sampling probability
+                    double new_total_sampling_prob = total_sampling_prob * sampling_prob;
+
+                    // Compute traversing player's reach probability under sigma
+                    double sigma_i = strategy[action];
+                    if (sigma_i == 0) {
+                        DEBUG_NONE("this shouldn't happen");
+                        sigma_i = 0.01;
+                    }
+                    //double sigma_i = strategy[action];
+                    DEBUG_WRITE(logfile, "sigma_i=" << sigma_i);
+                    double new_player_reach = player_reach * sigma_i;
+                    DEBUG_WRITE(logfile, "new_pi_sigma_prime=" << new_total_sampling_prob);
+
+                    // Take the action in the engine
+                    take_action(&engine, current_player, action);
+
+                    // Get next player
+                    int next_player = engine.turn();
+
+                    double u = cfr(engine, traversing_player, next_player, new_player_reach, opp_reach, new_total_sampling_prob, depth + 1);
+                    DEBUG_WRITE(logfile, "u=" << u);
+
+                    double w_I = u * (player_reach / total_sampling_prob);
+
+                    // Compute the regrets for each action
+                    auto cum_regrets = 0.0;
+                    std::array<double, NUM_ACTIONS> regrets;
+                    for (int a = 0; a < NUM_ACTIONS; ++a) {
+                        if (a == action) {
+                            regrets[a] = w_I * (1.0 - strategy[a]);
+                        } else {
+                            regrets[a] = -w_I * strategy[a];
+                        }
+                        cum_regrets += std::abs(regrets[a]);
+                    }
+                    DEBUG_WRITE(logfile, "regrets=" << format_array(regrets));
+
+                    if (cum_regrets >= 1e-3) {
+                        // Store the regrets (advantages) in the buffer
+                        TraverseAdvantage adv;
+                        adv.state = state;
+                        adv.advantages = regrets;
+                        adv.iteration = cfr_iter;
+                        if (t % 100 == 0) {
+                            DEBUG_WRITE(logfile, "advantages="<<format_array(regrets));
+                        }
+                        safe_add_advantage(traversing_player, adv, rng);
+                    }
+                    return u;
+                } catch (const c10::Error& e) {
+                    DEBUG_NONE("torch error in forward pass: " << e.what());
+                    DEBUG_NONE("msg: " << e.msg());  
+                    throw;
+                } catch (const std::exception& e) {
+                    DEBUG_NONE("error in forward pass: " << e.what());
+                    throw;
+                } catch (...) {
+                    DEBUG_NONE("unknown error in forward pass");
+                    throw;
                 }
-                return u;
             } else {
-                // Opponent's turn
-                // Get the model for opponent
-                auto model = models[current_player];
+                try {
+                    // Opponent's turn
+                    // Get the model for opponent
+                    auto model = models[current_player];
 
-                State state;
-                get_state(engine, &state, current_player);
+                    State state;
+                    get_state(engine, &state, current_player);
 
-                update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                    update_tensors(state, hand, flop, turn, river, 0);
 
-                auto logits = model->forward(hand.to(gpu_device), flop.to(gpu_device), turn.to(gpu_device), river.to(gpu_device), bet_fracs.to(gpu_device), bet_status.to(gpu_device)).to(cpu_device);
+                    auto logits = model->forward(hand.to(gpu_device), flop.to(gpu_device), turn.to(gpu_device), river.to(gpu_device), state.bet_fracs.to(gpu_device), state.bet_status.to(gpu_device)).to(cpu_device);
 
-                std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
+                    std::array<double, NUM_ACTIONS> strategy = regret_match(logits[0]);
 
-                int action = sample_action(strategy);
-                double sigma = strategy[action];
+                    int action = sample_action(strategy);
 
-                double new_pi_sigma_minus_i = pi_sigma_minus_i * sigma;
+                    while (!verify_action(&engine, current_player, action, logfile)) {
+                        DEBUG_WRITE(logfile, "invalid action=" << action << "trying next " << (action - 1 + NUM_ACTIONS) % NUM_ACTIONS);
+                        action = (action - 1 + NUM_ACTIONS) % NUM_ACTIONS;
+                    }
 
-                take_action(&engine, current_player, action);
+                    double sigma = strategy[action];
+                    if (sigma == 0) sigma = 0.1;
 
-                int next_player = engine.turn();
+                    double new_opp_reach = opp_reach * sigma;
 
-                // Recurse
-                double u = cfr(engine, traversing_player, next_player, pi_sigma_i, new_pi_sigma_minus_i, pi_sigma_prime, depth + 1);
+                    take_action(&engine, current_player, action);
 
-                return u;
+                    int next_player = engine.turn();
+
+                    // Recurse
+                    double u = cfr(engine, traversing_player, next_player, player_reach, new_opp_reach, new_opp_reach, depth + 1);
+
+                    return u;
+                } catch (const c10::Error& e) {
+                    DEBUG_NONE("torch error in forward pass: " << e.what());
+                    DEBUG_NONE("msg: " << e.msg());  
+                    throw;
+                } catch (const std::exception& e) {
+                    DEBUG_NONE("error in forward pass: " << e.what());
+                    throw;
+                } catch (...) {
+                    DEBUG_NONE("unknown error in forward pass");
+                    throw;
+                }
             }
         };
 
@@ -496,7 +560,7 @@ void profile_outcome_sampling(
                     auto model = models[traversing_player];
                     
                     time_section("update_tensors", timers, counters, [&]() {
-                        update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                        update_tensors(state, hand, flop, turn, river, 0);
                     });
 
                     auto logits = time_section("forward_pass", timers, counters, [&]() {
@@ -557,7 +621,7 @@ void profile_outcome_sampling(
                     auto model = models[current_player];
                     State state;
                     get_state(engine, &state, current_player);
-                    update_tensors(state, hand, flop, turn, river, bet_fracs, bet_status, 0);
+                    update_tensors(state, hand, flop, turn, river, 0);
                     
                     auto logits = model->forward(hand, flop, turn, river, bet_fracs, bet_status).to(cpu_device);
                     auto strategy = regret_match(logits[0]);
@@ -652,10 +716,12 @@ int main() {
     auto batched_flops = init_batched_flops(TRAIN_BS).to(gpu_device);
     auto batched_turns = init_batched_turns(TRAIN_BS).to(gpu_device);
     auto batched_rivers = init_batched_rivers(TRAIN_BS).to(gpu_device);
-    auto batched_fracs = init_batched_fracs(TRAIN_BS).to(gpu_device);
-    auto batched_status = init_batched_status(TRAIN_BS).to(gpu_device);
+    auto batched_fracs = init_batched_fracs(TRAIN_BS).to(cpu_device);
+    auto batched_status = init_batched_status(TRAIN_BS).to(cpu_device);
     auto batched_advs = init_batched_advs(TRAIN_BS).to(cpu_device);
 
+    auto batched_fracs_a = batched_fracs.accessor<float, 2>();
+    auto batched_status_a = batched_status.accessor<float, 2>();
     auto batched_advs_a = batched_advs.accessor<float, 2>();
 
     for (int cfr_iter=1; cfr_iter<CFR_ITERS+1; ++cfr_iter) {
@@ -718,6 +784,7 @@ int main() {
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             DEBUG_NONE("TRAIN_ITERS = " << train_iters);
             DEBUG_WRITE(logfile, "TRAIN_ITERS = " << train_iters);
+            long total_time = 0; 
 
             for (size_t train_iter = 0; train_iter < train_iters; ++train_iter) {
                 // Rotate and shuffle window
@@ -731,18 +798,24 @@ int main() {
                         batched_flops, 
                         batched_turns,
                         batched_rivers,
-                        batched_fracs,
-                        batched_status,
                         i
                     ); 
 
-                    for (size_t a = 0; a < NUM_ACTIONS; ++a) {
+                    auto fracs_a = S.bet_fracs.accessor<float, 2>();
+                    auto status_a = S.bet_status.accessor<float, 2>();
+
+                    for (size_t j = 0; j < 4 * NUM_PLAYERS * MAX_ROUND_BETS; ++j) {
+                        batched_fracs_a[i][j] = fracs_a[0][j];
+                        batched_status_a[i][j] = status_a[0][j];
+                    }
+
+                    for  (size_t a = 0; a < NUM_ACTIONS; ++a) {
                         batched_advs_a[i][a] = global_player_advs[player][idx].advantages[a];
                     }
                     int iteration = global_player_advs[player][idx].iteration;
                 }
+                auto start = std::chrono::steady_clock::now();
                 auto batch_advantages = batched_advs.slice(0, 0, train_bs).to(gpu_device);
-                //auto transformed_advantages = batch_advantages.sign() * torch::log1p(batch_advantages.abs());
 
                 optimizer.zero_grad();
 
@@ -755,6 +828,10 @@ int main() {
                     batched_status.slice(0, 0, train_bs)
                 );
 
+                auto end = std::chrono::steady_clock::now();
+                auto step_tm = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                total_time += static_cast<long>(step_tm);
+
                 auto loss = torch::nn::functional::smooth_l1_loss(
                     pred, 
                     batch_advantages,
@@ -764,8 +841,8 @@ int main() {
                 loss.backward();
                 torch::nn::utils::clip_grad_norm_(train_net->parameters(), 1.0);
                 optimizer.step();
-                if (train_iter % 100 == 0) {
-                    DEBUG_NONE("ITER: " << train_iter << "/" << train_iters << " LOSS: " << loss.to(cpu_device).item());            
+                if (train_iter % 10 == 0) {
+                    DEBUG_NONE("ITER: " << train_iter << "/" << train_iters << " took " << total_time / train_iter  << "ms" << " LOSS: " << loss.to(cpu_device).item() );            
                 }
             }
 

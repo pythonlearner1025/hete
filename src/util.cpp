@@ -8,7 +8,11 @@ BetHistory construct_history(PokerEngine& engine) {
         for(int p = 0; p < NUM_PLAYERS; p++) {
             for(int b = 0; b < MAX_ROUND_BETS; b++) {
                 if(engine.players[p].bets_per_round[r][b] >= 0) {
-                    hist.amounts[r][p][b] = engine.players[p].bets_per_round[r][b] / pot;
+                    if (pot > 0) {
+                        hist.amounts[r][p][b] = engine.players[p].bets_per_round[r][b] / pot;
+                    } else {
+                        hist.amounts[r][p][b] = 0.0;
+                    }
                     hist.status[r][p][b] = engine.players[p].bets_per_round[r][b] > 0;
                     pot += engine.players[p].bets_per_round[r][b];
                 }
@@ -24,8 +28,6 @@ void update_tensors(
     torch::Tensor flop, 
     torch::Tensor turn, 
     torch::Tensor river, 
-    torch::Tensor bet_fracs, 
-    torch::Tensor bet_status,
     int batch 
 ) {
 
@@ -50,9 +52,6 @@ void update_tensors(
 
     // Update river card
     river_a[0][0] = S.river[0];
-
-    bet_fracs = S.bet_fracs;
-    bet_status = S.bet_status;
 }
 
 float sample_uniform() {
@@ -101,6 +100,12 @@ void take_action(PokerEngine* engine, int player, int act) {
         engine->check_or_call(player); 
         return;
     }
+
+    if (act == NUM_ACTIONS-1) {
+        engine->all_in(player);
+        return;
+    }
+
     double inc = engine->get_pot() * 1.0 / static_cast<double>(NUM_ACTIONS);
     double bet_amt = inc;
     for (int a = 2; a < NUM_ACTIONS; ++a) {
@@ -112,7 +117,7 @@ void take_action(PokerEngine* engine, int player, int act) {
     }
 }
 
-bool verify_action(PokerEngine* engine, int player, int act) {
+bool verify_action(PokerEngine* engine, int player, int act, std::string logfile = "") {
     if (act == 0) {
         return engine->can_fold(player);
     }
@@ -123,7 +128,7 @@ bool verify_action(PokerEngine* engine, int player, int act) {
     double bet_amt = inc;
     for (int a = 2; a < NUM_ACTIONS; ++a) {
         if (a == act) {
-            return engine->can_bet_or_raise(player, bet_amt);
+            return engine->can_bet_or_raise(player, bet_amt, logfile);
         }
         bet_amt += inc;
     }
@@ -172,9 +177,10 @@ std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
     // If the sum is zero or negative, return a one-hot vector for the max logit
     else {
         auto max_index = torch::argmax(relu_logits).item<int>();
-        std::fill(strat.begin(), strat.end(), 0.0);
-        strat[max_index] = 1.0;
+        std::fill(strat.begin(), strat.end(), 1.0/static_cast<float>(NUM_ACTIONS));
+        //strat[max_index] = 1.0;
     }
+
     return strat;
 }
 
