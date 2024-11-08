@@ -9,7 +9,7 @@ constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 2;
 constexpr size_t CFR_ITERS = 100;
-constexpr size_t NUM_THREADS = 8;
+constexpr size_t NUM_THREADS = 1;
 
 constexpr float BETA = 0;
 constexpr double EPSILON = 0.6;

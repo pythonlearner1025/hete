@@ -13,6 +13,7 @@ ompeval.egg-info/
 out/
 *.so
 wandb/
+tempbuild/
 
 # ignore 
 *.deb

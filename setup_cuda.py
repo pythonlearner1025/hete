@@ -2,7 +2,7 @@ from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension
 import os
 import platform
-import torch
+#import torch
 import torch.utils.cpp_extension
 
 # Get PyTorch's include paths including CUDA
@@ -17,7 +17,7 @@ if torch.cuda.is_available():
 
 # Combine all include paths
 include_dirs = (
-    torch_include_dirs +
+    #torch_include_dirs +
     cuda_include_dirs + 
     [os.path.dirname(torch.__file__),
      os.path.join(os.path.dirname(torch.__file__), "include")]
@@ -54,7 +54,7 @@ ext_modules = [
             *torch_library_dirs,
             ompeval_lib_dir,
         ],
-        libraries=['torch_python', 'torch_cpu', 'torch_cuda', 'c10', 'c10_cuda'],
+        libraries=['torch_cuda', 'c10', 'c10_cuda'],
         extra_objects=[ompeval_lib_path],
         extra_compile_args=[
             "-std=c++17",
