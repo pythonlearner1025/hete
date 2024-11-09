@@ -6,6 +6,7 @@ __pycache__/
 build/
 ompeval.cpython-312-darwin.so
 .vscode/
+mlx/
 
 *.pt
 

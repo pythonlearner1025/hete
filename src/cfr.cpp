@@ -15,6 +15,7 @@
 #include <cmath>
 #include <sstream> 
 #include <memory>
+#include "model/mlxmodel.h"
 
 struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
@@ -647,8 +648,13 @@ void profile_outcome_sampling(
     log_perf();
 }
 
-
 int main() {
+    test_mlx();
+    return 0;
+}
+
+
+int def() {
     auto now = std::chrono::system_clock::now();
     std::time_t now_time = std::chrono::system_clock::to_time_t(now);
     std::tm *ltm = std::localtime(&now_time);

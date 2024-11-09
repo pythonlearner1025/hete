@@ -78,6 +78,7 @@ struct CardEmbeddingImpl : torch::nn::Module {
         return std::make_tuple(embs, valid);
     }
 };
+
 TORCH_MODULE(CardEmbedding); // Creates CardEmbedding as a ModuleHolder<CardEmbeddingImpl>
 
 // ========================
