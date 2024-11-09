@@ -1,57 +1,25 @@
 #include "util.h"
 
-BetHistory construct_history(PokerEngine& engine) {
-    BetHistory hist;
-    double pot = engine.small_blind + engine.big_blind;
-    
-    for(int r = 0; r < 4; r++) {
-        for(int p = 0; p < NUM_PLAYERS; p++) {
-            for(int b = 0; b < MAX_ROUND_BETS; b++) {
-                if(engine.players[p].bets_per_round[r][b] >= 0) {
-                    if (pot > 0) {
-                        hist.amounts[r][p][b] = engine.players[p].bets_per_round[r][b] / pot;
-                    } else {
-                        hist.amounts[r][p][b] = 0.0;
-                    }
-                    hist.status[r][p][b] = engine.players[p].bets_per_round[r][b] > 0;
-                    pot += engine.players[p].bets_per_round[r][b];
-                }
-            }
-        }
-    }
-    return hist;
-}
+using namespace mlx::core;
 
-void update_tensors(
-    const State S, 
-    torch::Tensor hand, 
-    torch::Tensor flop, 
-    torch::Tensor turn, 
-    torch::Tensor river, 
-    int batch 
-) {
-
-    // Fill CPU tensors using accessors
-    auto hand_a = hand.accessor<int32_t, 2>();
-    auto flop_a = flop.accessor<int32_t, 2>();
-    auto turn_a = turn.accessor<int32_t, 2>();
-    auto river_a = river.accessor<int32_t, 2>();
-
-    // Update hand cards
-    for (int i = 0; i < 2; ++i) {
-        hand_a[0][i] = S.hand[i];
-    }
-
-    // Update flop cards
-    for (int i = 0; i < 3; ++i) {
-        flop_a[0][i] = S.flop[i];
-    }
-
-    // Update turn card
-    turn_a[0][0] = S.turn[0];
-
-    // Update river card
-    river_a[0][0] = S.river[0];
+std::vector<float> get_bets(PokerEngine& engine) {
+   std::vector<float> amounts;
+   amounts.reserve(4 * NUM_PLAYERS * MAX_ROUND_BETS);
+   double pot = engine.small_blind + engine.big_blind;
+   
+   for(int r = 0; r < 4; r++) {
+       for(int p = 0; p < NUM_PLAYERS; p++) {
+           for(int b = 0; b < MAX_ROUND_BETS; b++) {
+               float val = 0.0f;
+               if(engine.players[p].bets_per_round[r][b] >= 0 && pot > 0) {
+                   val = engine.players[p].bets_per_round[r][b] / pot;
+                   pot += engine.players[p].bets_per_round[r][b];
+               }
+               amounts.push_back(val);
+           }
+       }
+   }
+   return amounts;
 }
 
 float sample_uniform() {
@@ -140,51 +108,49 @@ void get_state(
     State* state,
     int player
 ) {
-    auto history = construct_history(game);
+    state->bets = get_bets(game); 
+    std::vector<float> hands_vec;
     std::array<int, 2> hand = game.players[player].hand;
+    for (int i = 0; i < 2; ++i) {
+        hands_vec.push_back(game.players[player].hand[i]);
+    }
+
     std::array<int, 5> board = game.get_board();
-
-    auto [bet_fracs, bet_status] = history.to_tensors();
-    state->bet_fracs = bet_fracs;
-    state->bet_status = bet_status;
-
-    // Assign hand, flop, turn, and river
-    state->hand = hand;
     for (int i = 0; i < 3; ++i) {
-        state->flop[i] = board[i];
+        hands_vec.push_back(board[i]);
     }
 
-    state->turn[0] = board[3];
-    state->river[0] = board[4];
+    hands_vec.push_back(board[3]);
+    hands_vec.push_back(board[4]);
+    state->hands = hands_vec;
 }
 
-// Must return a probability distribution
-std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits) {
-    auto relu_logits = torch::relu(logits);
-    
-    double logits_sum = relu_logits.sum().item<double>();
-    
-    std::array<double, NUM_ACTIONS> strat{};
-    
-    // If the sum is positive, calculate the strategy
-    if (logits_sum > 0) {
-        auto strategy_tensor = relu_logits / logits_sum;
-        auto strat_data = strategy_tensor.data_ptr<float>();
-        for (int i = 0; i < NUM_ACTIONS; ++i) {
-            strat[i] = strat_data[i];
-        }
-    } 
-    // If the sum is zero or negative, return a one-hot vector for the max logit
-    else {
-        auto max_index = torch::argmax(relu_logits).item<int>();
-        std::fill(strat.begin(), strat.end(), 1.0/static_cast<float>(NUM_ACTIONS));
-        //strat[max_index] = 1.0;
-    }
+std::array<double, NUM_ACTIONS> regret_match(const mlx::core::array logits) {
+  auto relu_logits = maximum(logits, zeros_like(logits));
+  auto logits_sum = sum(relu_logits);
+  
+  mlx::core::array probs = (logits_sum.item<float>() > 0) 
+      ? relu_logits / logits_sum 
+      : full(logits.shape(), static_cast<double>(1.0f/NUM_ACTIONS));
 
-    return strat;
+  std::array<double, NUM_ACTIONS> out{0};
+  for(int i = 0; i < NUM_ACTIONS; i++) {
+      //array idx = array({i}); 
+      out[i] = static_cast<double>(take(probs, i).item<float>());
+  }
+  return out;
 }
 
+array regret_match_batched(const mlx::core::array logits) {
+  auto relu_logits = maximum(logits, zeros_like(logits));
+  auto logits_sum = sum(relu_logits);
+  
+  mlx::core::array probs = (logits_sum.item<float>() > 0) 
+      ? relu_logits / logits_sum 
+      : full(logits.shape(), static_cast<double>(1.0f/NUM_ACTIONS));
 
+  return probs;
+}
 // Must return a probability distribution
 std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta) {
     double logits_sum = logits.sum().item<double>() + beta;
@@ -197,80 +163,24 @@ std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float b
     return strat;
 }
 
-torch::Tensor regret_match_batched(const torch::Tensor& batched_logits) {
-    // Apply ReLU to ensure non-negative logits
-    auto relu_logits = torch::relu(batched_logits); // [batch_size, num_actions]
-    auto logits_sum = relu_logits.sum(1, true); // [batch_size, 1]
-    auto positive_mask = logits_sum.squeeze(1) > 0; // [batch_size]
-    auto strategy = torch::zeros_like(batched_logits); // [batch_size, num_actions]
-
-    // Handle positive sums
-    if (positive_mask.any().item<bool>()) {
-        auto positive_indices = torch::nonzero(positive_mask).squeeze(1); // [num_positive]
-        auto positive_logits = relu_logits.index_select(0, positive_indices); // [num_positive, num_actions]
-        auto positive_logits_sum = logits_sum.index_select(0, positive_indices); // [num_positive, 1]
-        auto positive_strategy = positive_logits / positive_logits_sum; // [num_positive, num_actions]
-        strategy.index_copy_(0, positive_indices, positive_strategy);
+void save_model(std::map<std::string, std::optional<mlx::core::array>> params, const std::string& filepath) {
+    std::unordered_map<std::string, array> save_map;
+    
+    for (const auto& [name, param_opt] : params) {
+        if (param_opt.has_value()) {
+            save_map.emplace(name, param_opt.value());
+        }
     }
+    save_safetensors(filepath, save_map);
+}
 
-    // Handle non-positive sums
-    auto negative_mask = ~positive_mask; // [batch_size]
-    if (negative_mask.any().item<bool>()) {
-        auto negative_indices = torch::nonzero(negative_mask).squeeze(1); // [num_negative]
-        auto negative_logits = relu_logits.index_select(0, negative_indices); // [num_negative, num_actions]
-        auto max_indices = torch::argmax(negative_logits, 1); // [num_negative]
-        auto one_hot = torch::zeros({negative_indices.size(0), batched_logits.size(1)}, batched_logits.options());
-        one_hot.scatter_(1, max_indices.unsqueeze(1), 1);
-        strategy.index_copy_(0, negative_indices, one_hot);
+std::map<std::string, std::optional<mlx::core::array>> load_model(const std::string& filepath) {
+    auto [loaded_arrays, metadata] = load_safetensors(filepath);
+    
+    std::map<std::string, std::optional<array>> param_map;
+    for (const auto& [name, arr] : loaded_arrays) {
+        param_map[name] = std::optional<array>(arr);
     }
-
-    return strategy;
-}
-
-torch::Tensor init_batched_hands(int BS) {
-    std::vector<int64_t> hand_shape = {BS, 2};
-    auto options = torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
-    return torch::zeros(hand_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_flops(int BS) {
-    std::vector<int64_t> flop_shape = {BS, 3};
-    auto options = torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
-    return torch::zeros(flop_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_turns(int BS) {
-    std::vector<int64_t> turn_shape = {BS, 2};
-    auto options = torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
-    return torch::zeros(turn_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_rivers(int BS) {
-    std::vector<int64_t> river_shape = {BS, 2};
-    auto options = torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
-    return torch::zeros(river_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_fracs(int BS) {
-    std::vector<int64_t> batched_fracs_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(false);
-    return torch::zeros(batched_fracs_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_status(int BS) { 
-    std::vector<int64_t> batched_status_shape = {BS, NUM_PLAYERS * MAX_ROUND_BETS * 4};
-    auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(false);
-    return torch::zeros(batched_status_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_advs(int BS) {
-    std::vector<int64_t> batched_advs_shape = {BS, NUM_ACTIONS};
-    auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(false);
-    return torch::zeros(batched_advs_shape, options).contiguous();
-}
-
-torch::Tensor init_batched_iters(int BS) {
-    std::vector<int64_t> batched_iters_shape = {BS, 1};
-    auto options = torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
-    return torch::zeros(batched_iters_shape, options).contiguous();
+    
+    return param_map;
 }

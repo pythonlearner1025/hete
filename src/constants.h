@@ -9,7 +9,7 @@ constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;
 constexpr size_t MAX_PLAYERS = 2;
 constexpr size_t CFR_ITERS = 1000;
-constexpr size_t NUM_THREADS = 6;
+constexpr size_t NUM_THREADS = 1;
 
 constexpr float BETA = 0;
 constexpr double EPSILON = 0.6;
@@ -22,11 +22,14 @@ constexpr int BOARD_SIZE = 5;
 constexpr int64_t MODEL_DIM = 128;
 constexpr int64_t NUM_HEADS = 1;      // Number of attention heads
 constexpr int64_t NUM_LAYERS = 1;     // Number of Transformer layers
+constexpr size_t N_HEADS = 4;
+constexpr size_t N_LAYERS = 3;
+constexpr int HEAD_DIM = MODEL_DIM / N_HEADS; 
 
 // training
-constexpr size_t TRAIN_BS = 512;
+constexpr size_t TRAIN_BS = 100;
 constexpr size_t TRAIN_EPOCHS = 100;
-constexpr size_t TRAIN_ITERS = 1600;
+constexpr size_t TRAIN_ITERS = 100;
 
 // eval
 constexpr size_t EVAL_BS = 100000;

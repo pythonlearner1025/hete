@@ -15,6 +15,7 @@ out/
 *.so
 wandb/
 tempbuild/
+llama.cpp/
 
 # ignore 
 *.deb

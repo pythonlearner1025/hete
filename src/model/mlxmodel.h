@@ -12,49 +12,36 @@
 
 using namespace mlx::core;
 
-std::string str_array(const std::array<double, NUM_ACTIONS>& arr) {
-    std::stringstream ss;
-    ss << std::fixed << std::setprecision(4) << "[";
-    for (size_t i = 0; i < arr.size(); ++i) {
-        ss << arr[i];
-        if (i < arr.size() - 1) ss << ", ";
-    }
-    ss << "]";
-    return ss.str();
-}
-
-using namespace mlx::core;
-
 
 // TODO maybe change to std::shared_ptr for safety 
 class MyModule {
 protected:
-   struct RegisteredArray {
-       array* arr;
-       std::string name;
-   };
+    struct RegisteredArray {
+        array* arr;
+        std::string name;
+    };
 
-   struct RegisteredModule {
-       MyModule* ptr; 
-       std::string name;
-   };
+    struct RegisteredModule {
+        MyModule* ptr;  // changed to shared_ptr
+        std::string name;
+    };
 
-   MyModule* parent = nullptr;
-   std::vector<RegisteredArray> arrays;
-   std::vector<RegisteredModule> modules;
-   std::string name;
+    MyModule* parent = nullptr;
+    std::vector<RegisteredArray> arrays;
+    std::vector<RegisteredModule> modules;
+    std::string name;
 
-   void register_array(array& arr, const std::string& name) {
-        arrays.push_back({&arr, name});  // take ownership
-   }
+    void register_array(array& arr, const std::string& name) {
+            arrays.push_back({&arr, name});  // take ownership
+    }
 
     void register_module(MyModule& module, const std::string& name) {
        if (name.empty()) {
            throw std::runtime_error("Cannot register module with empty name");
        }
-       module.name = name;  // <-- SET THE NAME HERE 
+       module.name = name;
        module.parent = this;
-       modules.push_back({&module, name}); 
+       modules.push_back({&module, name});  // wrap in shared_ptr
    }
 
 public:
@@ -223,20 +210,15 @@ public:
     }
 };
 
-constexpr size_t N_HEADS = 4;
-constexpr size_t N_LAYERS = 3;
-constexpr int HEAD_DIM = MODEL_DIM / N_HEADS; 
-
-class HeadLayerNorm : public MyModule {
+class LayerNorm : public MyModule {
   public:
     double eps = 1e-5; 
-    array gamma = ones({HEAD_DIM});
-    array beta = zeros({HEAD_DIM});
+    array gamma = ones({MODEL_DIM});
+    array beta = zeros({MODEL_DIM});
 
-    HeadLayerNorm() : MyModule("LayerNorm") {
+    LayerNorm() : MyModule("LayerNorm") {
         register_array(gamma, "gamma");
         register_array(beta, "beta");
-        DEBUG_NONE("layernorm reg complete");
     }
 
     array forward(array x) {
@@ -255,8 +237,6 @@ class Decoder : public MyModule  {
      array attn_out = random::normal({MODEL_DIM, HEAD_DIM});
      array ffn_1 = random::normal({HEAD_DIM, 4*MODEL_DIM});
      array ffn_2 = random::normal({4*MODEL_DIM, HEAD_DIM});
-     array layer_norm = random::normal({HEAD_DIM});
-     HeadLayerNorm norm;
 
      Decoder() : MyModule("Decoder") {
        register_array(attn_wq, "attn_wq");
@@ -265,36 +245,57 @@ class Decoder : public MyModule  {
        register_array(attn_out, "attn_out");
        register_array(ffn_1, "ffn_1");
        register_array(ffn_2, "ffn_2");
-       register_array(layer_norm, "layer_norm");
-       register_module(norm, "norm");
-       DEBUG_NONE("decoder reg complete");
+       ////DEBUG_NONE("decoder reg complete");
      }
 
    array forward(array x) {
       array q = matmul(x, attn_wq);
+      //DEBUG_NONE(get_full_path() << " q shape: " << q.shape());
+
       array k = matmul(x, attn_wk);
-      array v = matmul(x, attn_wv);
+      //DEBUG_NONE(get_full_path() << " k shape: " << k.shape());
       
-      array attn = reshape(matmul(q, reshape(k, {k.shape()[1], k.shape()[2], -1})) * sqrt(HEAD_DIM), {1, x.shape()[1], x.shape()[1]});
+      array v = matmul(x, attn_wv);
+      //DEBUG_NONE(get_full_path() << " v shape: " << v.shape());
+      
+      //array attn = reshape(matmul(q, reshape(k, {k.shape()[1], k.shape()[2], -1})) * sqrt(HEAD_DIM), {k.shape()[0], x.shape()[1], x.shape()[1]});
+      array attn = matmul(q, transpose(k, {0,2,1})) / sqrt(HEAD_DIM);
+
+      //DEBUG_NONE(get_full_path() << " attn shape: " << attn.shape());
+
       attn = tril(attn);
+      //DEBUG_NONE(get_full_path() << " tril shape: " << attn.shape());
+
       x = softmax(attn, -1);
+      //DEBUG_NONE(get_full_path() << " softmax shape: " << x.shape());
+
       x = matmul(x, v);
+      //DEBUG_NONE(get_full_path() << " attn*v shape: " << x.shape());
+
       x = matmul(x, ffn_1);
+      //DEBUG_NONE(get_full_path() << " ffn1 shape: " << x.shape());
+
       x = maximum(x, zeros_like(x));
+      //DEBUG_NONE(get_full_path() << " relu shape: " << x.shape());
+
+      //DEBUG_NONE(get_full_path() << " x shape: " << x.shape());
       x = matmul(x, ffn_2);
-      x = norm.forward(x);
+      //DEBUG_NONE(get_full_path() << " ffn2 shape: " << x.shape());
+
       return x;
    }
 };
 
+
 class MHA : public MyModule {
     public: 
     std::array<Decoder, N_HEADS> heads;
-
+    LayerNorm norm;
     MHA() : MyModule("MHA"), heads{} {
         for(size_t i = 0; i < N_HEADS; i++) {
             register_module(heads[i], "head_" + std::to_string(i));
         }
+        register_module(norm, "layernorm");
     }
 
     array forward(array x) {
@@ -305,6 +306,7 @@ class MHA : public MyModule {
         }
 
         array out = concatenate(outs, -1);
+        out = norm.forward(out);
         return out;
     }
 };
@@ -337,6 +339,8 @@ array test_card_embed(array x, array card_emb_w, array rank_emb_w, array suit_em
 }
 
 class PokerGPT : public MyModule {
+ private:
+    std::mutex graph_mutex;
  public: 
    array card_emb_w = random::normal({52, MODEL_DIM});
    array rank_emb_w = random::normal({13, MODEL_DIM}); 
@@ -346,7 +350,7 @@ class PokerGPT : public MyModule {
    std::array<MHA, N_LAYERS> layers; 
 
    PokerGPT() : MyModule("PokerGPT") {
-     //DEBUG_NONE("initializing PokerGPT");
+     //////DEBUG_NONE("initializing PokerGPT");
      register_array(card_emb_w, "card_emb_w");
      register_array(rank_emb_w, "rank_emb_w");
      register_array(suit_emb_w, "suit_emb_w");
@@ -356,31 +360,35 @@ class PokerGPT : public MyModule {
         std::string layer_name = "layer_" + std::to_string(i);
         register_module(layers[i], layer_name);  // register each head directly
      }
-    DEBUG_NONE("pokergpt reg complete");
+    ////DEBUG_NONE("pokergpt reg complete");
    }
 
-   array forward(array cards, array bets, array round_ids, std::vector<int>& vec_pos_ids) {
+   array forward(array cards, array bets) {
       auto BS = cards.shape()[0];
-  
       auto card_emb = test_card_embed(cards, card_emb_w, rank_emb_w, suit_emb_w);
       bets = matmul(reshape(bets, {BS,-1, 1}), bet_proj_w);
-      array pos_ids = make_pos_ids(vec_pos_ids);
+      array pos_ids = make_pos_ids();
 
       array round_pe = get_round_encoding();
       array action_pe = get_action_encoding();
+      //DEBUG_NONE("got action pe" << action_pe.shape());
 
       array preflop = reshape(repeat(take(round_pe, 0, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
       array flop = reshape(repeat(take(round_pe, 1, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM}); 
       array turn = reshape(repeat(take(round_pe, 2, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
       array river = reshape(repeat(take(round_pe, 3, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
       array concat_round_pos = concatenate({preflop, flop, turn, river}, 0); 
+      //DEBUG_NONE("got concat_round_pos" << concat_round_pos.shape());
 
       bets = add(add(bets, concat_round_pos), repeat(action_pe, 4, 0));
+      //DEBUG_NONE("bets" << bets.shape());
 
       array x = concatenate({card_emb, bets}, 1);
+      //DEBUG_NONE("x" << x.shape());
 
       for (size_t i=0; i<NUM_LAYERS; ++i) {
         x = layers[i].forward(x);
+        ////DEBUG_NONE("layer " << i << x.shape());
       }
 
       array last_tokens = slice(
@@ -388,14 +396,18 @@ class PokerGPT : public MyModule {
         {0, x.shape(1)-1, 0},
         {x.shape(0), x.shape(1), x.shape(2)}
       );
+      //DEBUG_NONE("last_tokens " << last_tokens.shape());
 
       array out = matmul(last_tokens, action_head);
+      //DEBUG_NONE("out " << out.shape());
       return out;
    }
 
-   array make_pos_ids(const std::vector<int>& pos) {
-       array arr = array(pos.data(), {static_cast<int>(pos.size())});
-       return arr;
+   array make_pos_ids() {
+        std::vector<int> pos_vec(NUM_PLAYERS * MAX_ROUND_BETS);
+        std::iota(pos_vec.begin(), pos_vec.end(), 0);
+        array arr = array(pos_vec.data(), {static_cast<int>(pos_vec.size())});
+        return arr;
    }
 
     array get_round_encoding() {
@@ -447,9 +459,30 @@ class PokerGPT : public MyModule {
                   {row_indices, add(sin_cols, array(1))},
                   cos_updates, 
                   {0, 1});
-                  
       return pe;
-  }
+    }
+
+    void to_bfloat16() {
+        card_emb_w = astype(card_emb_w, bfloat16);
+        rank_emb_w = astype(rank_emb_w, bfloat16);
+        suit_emb_w = astype(suit_emb_w, bfloat16);
+        bet_proj_w = astype(bet_proj_w, bfloat16);
+        action_head = astype(action_head, bfloat16);
+
+        for(auto& layer : layers) {
+            for(auto& head : layer.heads) {
+                head.attn_wq = astype(head.attn_wq, bfloat16);
+                head.attn_wk = astype(head.attn_wk, bfloat16);
+                head.attn_wv = astype(head.attn_wv, bfloat16);
+                head.attn_out = astype(head.attn_out, bfloat16);
+                head.ffn_1 = astype(head.ffn_1, bfloat16);
+                head.ffn_2 = astype(head.ffn_2, bfloat16);
+            }
+            layer.norm.gamma = astype(layer.norm.gamma, bfloat16);
+            layer.norm.beta = astype(layer.norm.beta, bfloat16);
+        }
+    }
+
 };
 
 enum class Reduction {
@@ -544,7 +577,7 @@ void test_mlx() {
     DEBUG_NONE("n params: " << n_params);
 
     DEBUG_NONE("init opt");
-    array targets = zeros(gpt.forward(hand, bets, round_ids, pos_vec).shape());
+    array targets = zeros(gpt.forward(hand, bets).shape());
       // define loss function that takes vector of arrays instead of map
     auto loss_fn = [&](const std::vector<array>& param_arrays) {
         // construct parameter map from vector
@@ -558,7 +591,7 @@ void test_mlx() {
         
         gpt.update(param_map);
         
-        array preds = gpt.forward(hand, bets, round_ids, pos_vec);
+        array preds = gpt.forward(hand, bets);
         // compute loss
         return smooth_l1_loss(preds, targets);
     };
@@ -579,10 +612,9 @@ void test_mlx() {
 
         auto start = std::chrono::high_resolution_clock::now();
         auto grad_fn = mlx::core::value_and_grad(loss_fn, argnums);
+        auto [losses, grads] = grad_fn(param_arrays);
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
-        DEBUG_NONE("step took " << duration.count() << " us");
-        auto [losses, grads] = grad_fn(param_arrays);
 
         std::map<std::string, std::optional<array>> grad_map;
         int i = 0;

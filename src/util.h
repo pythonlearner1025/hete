@@ -3,81 +3,27 @@
 #include <torch/torch.h>
 #include "engine.h"
 #include "debug.h"
+#include <mlx/mlx.h>
 #include <array>
 #include <numeric>
 #include <algorithm>
 #include <cmath>
 
-struct BetHistory {
-    std::array<std::array<std::array<double, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> amounts;
-    std::array<std::array<std::array<bool, MAX_ROUND_BETS>, NUM_PLAYERS>, 4> status;
-
-    BetHistory() {
-        // zero init all arrays
-        for(auto& r : amounts) {
-            for(auto& p : r) {
-                p.fill(0.0);
-            }
-        }
-        for(auto& r : status) {
-            for(auto& p : r) {
-                p.fill(false);
-            }
-        }
-    }
-
-    std::pair<torch::Tensor, torch::Tensor> to_tensors() const {
-        auto options = torch::TensorOptions().dtype(torch::kFloat32);
-        
-        auto amounts_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
-        auto status_tensor = torch::zeros({4, NUM_PLAYERS, MAX_ROUND_BETS}, options);
-
-        auto amounts_acc = amounts_tensor.accessor<float,3>();
-        auto status_acc = status_tensor.accessor<float,3>();
-        
-        for(int r = 0; r < 4; r++) {
-            for(int p = 0; p < NUM_PLAYERS; p++) {
-                for(int b = 0; b < MAX_ROUND_BETS; b++) {
-                    amounts_acc[r][p][b] = amounts[r][p][b];
-                    status_acc[r][p][b] = status[r][p][b] ? 1.0f : 0.0f; // explicit conversion
-                }
-            }
-        }
-
-        return {amounts_tensor.flatten().unsqueeze(0), status_tensor.flatten().unsqueeze(0)};
-    }
-};
-
-BetHistory construct_history(PokerEngine& engine);
+std::vector<float> get_bets(PokerEngine& engine);
 
 struct State {
-    std::array<int, 2> hand{};
-    std::array<int, 3> flop{};
-    std::array<int, 1> turn{};
-    std::array<int, 1> river{};
-    torch::Tensor bet_fracs{};
-    torch::Tensor bet_status{};
+    std::vector<float> hands;
+    std::vector<float> bets;
 };
-
-void update_tensors(
-    const State S, 
-    torch::Tensor hand, 
-    torch::Tensor flop, 
-    torch::Tensor turn, 
-    torch::Tensor river, 
-    int batch = 0 
-);
 
 void get_state(
     PokerEngine& game,
     State* state,
     int player
 );
-
 float sample_uniform(); 
-std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta); 
-std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits);
-
+std::array<double, NUM_ACTIONS> sample_prob(const mlx::core::array logits); 
+std::array<double, NUM_ACTIONS> regret_match(const mlx::core::array logits);
 template <typename T, std::size_t N>
 std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr) {
     T sum = std::accumulate(arr.begin(), arr.end(), static_cast<T>(0));
@@ -103,15 +49,6 @@ int sample_action(const std::array<double, NUM_ACTIONS>& strat);
 int sample_iter(size_t iter);
 void take_action(PokerEngine* engine, int player, int act);
 bool verify_action(PokerEngine* engine, int player, int act, std::string logfile);
-
-torch::Tensor regret_match_batched(const torch::Tensor& batched_logits);
-
-torch::Tensor init_batched_hands(int BS);
-torch::Tensor init_batched_flops(int BS);
-torch::Tensor init_batched_turns(int BS);
-torch::Tensor init_batched_rivers(int BS);
-torch::Tensor init_batched_status(int BS);
-torch::Tensor init_batched_fracs(int BS);
-torch::Tensor init_batched_advs(int BS);
-torch::Tensor init_batched_iters(int BS);
+void save_model(std::map<std::string, std::optional<mlx::core::array>> params, const std::string& filepath);
+std::map<std::string, std::optional<mlx::core::array>> load_model(const std::string& filepath);
 #endif

@@ -14,7 +14,7 @@
 struct TraverseAdvantage {
     State state;
     int iteration;
-    std::array<double, NUM_ACTIONS> advantages;
+    std::array<double, NUM_ACTIONS> regrets;
 };
 
 // The traverse function
