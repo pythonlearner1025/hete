@@ -25,143 +25,12 @@ std::string str_array(const std::array<double, NUM_ACTIONS>& arr) {
 
 using namespace mlx::core;
 
-// key functions to implement:
-// model.update(new_weight_dict) -> apply new weights to all model weights, see 
-// https://github.com/ml-explore/mlx/blob/main/python/mlx/nn/layers/base.py
-// optimizer apply_gradients
-// i'd have to impl apply_single 
-/*
 
- def apply_gradients(self, gradients: dict, parameters: dict):
-        """Apply the gradients to the parameters and return the updated parameters.
-
-        Can be used to update a model via
-        ``model.update(opt.apply_gradients(grads, model))`` which is precisely
-        how :meth:`Optimizer.update` is implemented.
-
-        Args:
-            gradients (dict): A Python tree of gradients.
-            parameters (dict): A Python tree of parameters. It can be a
-              superset of the gradients. In that case the returned python
-              tree will be of the same structure as the gradients.
-        """
-        if not self._initialized:
-            self.init(gradients)
-
-        # Update any scheduled variables
-        for param, scheduler in self._schedulers.items():
-            self.state[param] = scheduler(self.step)
-
-        # Increment the step
-        self.state["step"] = self.step + 1
-
-        # Apply the update
-        return tree_map(self.apply_single, gradients, parameters, self.state)
-
-*/
-class AdamOptimizer {
-private:
-    float lr;
-    float beta1;
-    float beta2; 
-    float eps;
-    int step_count = 0;
-    
-    // store refs to model parameters for faster access
-    std::map<std::string, array*> param_ptrs;
-    
-    // optimizer state
-    std::map<std::string, array> m; // first moment
-    std::map<std::string, array> v; // second moment
-
-    // helper for gradient clipping
-    array clip_gradients(const array& grad, float max_norm) {
-        if (max_norm <= 0) return grad;
-        
-        array grad_norm = sqrt(sum(square(grad)));
-        array scale = minimum(array(max_norm), grad_norm) / grad_norm;
-        return multiply(grad, scale);
-    }
-
-public:
-    AdamOptimizer(
-        MyModule& model,
-        float learning_rate = 0.001f,
-        float beta1 = 0.9f,
-        float beta2 = 0.999f,
-        float eps = 1e-8f
-    ) : lr(learning_rate), beta1(beta1), beta2(beta2), eps(eps) {
-        // get parameter map from model
-        auto params = model.parameters();
-        
-        // initialize state
-        for (auto& [name, param_opt] : params) {
-            if (!param_opt.has_value()) continue;
-            
-            // get non-const pointer to parameter
-            array* param = const_cast<array*>(&param_opt.value());
-            param_ptrs[name] = param;
-            
-            // init momentum and velocity to zeros
-            m[name] = zeros_like(*param);
-            v[name] = zeros_like(*param);
-        }
-    }
-
-    void step(const std::map<std::string, array>& grads, float max_norm = -1.0f) {
-        step_count++;
-        
-        // compute bias correction terms
-        float bc1 = 1.0f - std::pow(beta1, step_count);
-        float bc2 = 1.0f - std::pow(beta2, step_count);
-        float lr_t = lr * std::sqrt(bc2) / bc1;
-
-        for (const auto& [name, param_ptr] : param_ptrs) {
-            if (grads.count(name) == 0) continue;
-            
-            const array& grad = grads.at(name);
-            array& param = *param_ptr;
-            
-            // clip gradients if max_norm specified
-            array clipped_grad = clip_gradients(grad, max_norm);
-            
-            // update momentum
-            m[name] = add(
-                multiply(array(beta1), m[name]),
-                multiply(array(1.0f - beta1), clipped_grad)
-            );
-            
-            // update velocity 
-            v[name] = add(
-                multiply(array(beta2), v[name]),
-                multiply(array(1.0f - beta2), square(clipped_grad))
-            );
-            
-            // update parameters
-            array update = multiply(
-                array(lr_t),
-                divide(
-                    m[name],
-                    add(sqrt(v[name]), array(eps))
-                )
-            );
-            
-            param = subtract(param, update);
-        }
-    }
-
-    // basic scheduler that reduces learning rate by factor after n steps
-    void schedule_lr(float factor, int after_steps) {
-        if (step_count > after_steps) {
-            lr *= factor;
-        }
-    }
-};
-
+// TODO maybe change to std::shared_ptr for safety 
 class MyModule {
 protected:
    struct RegisteredArray {
-       array* ptr;
+       array* arr;
        std::string name;
    };
 
@@ -173,31 +42,30 @@ protected:
    MyModule* parent = nullptr;
    std::vector<RegisteredArray> arrays;
    std::vector<RegisteredModule> modules;
-   std::string class_name;
+   std::string name;
 
    void register_array(array& arr, const std::string& name) {
-       arrays.push_back({&arr, name});
+        arrays.push_back({&arr, name});  // take ownership
    }
 
-   void register_module(MyModule& module, const std::string& name) {
+    void register_module(MyModule& module, const std::string& name) {
+       if (name.empty()) {
+           throw std::runtime_error("Cannot register module with empty name");
+       }
+       module.name = name;  // <-- SET THE NAME HERE 
        module.parent = this;
        modules.push_back({&module, name}); 
    }
 
-   template<typename T, size_t N>
-   void register_module_array(std::array<T,N>& arr, const std::string& array_name) {
-       for(size_t i = 0; i < N; i++) {
-           arr[i].parent = this;
-           modules.push_back({&arr[i], array_name + "." + std::to_string(i)});
-       }
-   }
-
 public:
-   MyModule(const std::string& class_name) : class_name(class_name) {}
+   MyModule(const std::string& name_) : name(name_) {}
 
    std::string get_full_path() const {
-       if (!parent) return class_name;
-       return parent->get_full_path() + "." + class_name;
+       if (!parent) {
+        return name;
+       }
+       auto path = parent->get_full_path() + "." + name;
+       return path;
    }
 
     std::map<std::string, std::optional<array>> parameters() {
@@ -210,19 +78,21 @@ public:
         return params;
     }
 
-   void visit(const std::function<void(const std::string&, array&)>& visitor) {
-       std::string base_path = get_full_path();
+    void visit(const std::function<void(const std::string&, array&)>& visitor, 
+            const std::string& parent_path = "") {
+        std::string base_path = parent_path.empty() ? name 
+                                              : parent_path + "." + name;
 
-       // visit arrays
-       for (auto& reg : arrays) {
-           visitor(base_path + "." + reg.name, *reg.ptr);
-       }
+        // visit arrays
+        for (auto& reg : arrays) {
+            visitor(base_path + "." + reg.name, *reg.arr);
+        }
 
-       // visit nested modules
-       for (auto& reg : modules) {
-           reg.ptr->visit(visitor);
-       }
-   }
+        // visit nested modules 
+        for (auto& reg : modules) {
+            reg.ptr->visit(visitor, base_path);
+        }
+    }
 
    void update(const std::map<std::string, std::optional<array>>& params) {
        std::string base_path = get_full_path();
@@ -231,10 +101,9 @@ public:
        for (auto& reg : arrays) {
            std::string full_path = base_path + "." + reg.name;
            if (params.count(full_path)) {
-               *reg.ptr = params.at(full_path).value();
+               *reg.arr = params.at(full_path).value();
            }
        }
-
        // update nested modules
        for (auto& reg : modules) {
            reg.ptr->update(params);
@@ -242,8 +111,120 @@ public:
    }
 };
 
-constexpr size_t N_HEADS = 2;
-constexpr size_t N_LAYERS = 1;
+class AdamOptimizer {
+private:
+    float lr;
+    float beta1;
+    float beta2; 
+    float eps;
+    int step_count = 0;
+    
+    struct State {
+        std::optional<array> m; // first moment 
+        std::optional<array> v; // second moment
+        
+        // now we can have a default constructor
+        State() = default;
+        
+        // and our normal constructor 
+        State(const array& m_, const array& v_) : m(m_), v(v_) {}
+    };
+    // optimizer state storage
+    std::map<std::string, State> state;
+
+public:
+    AdamOptimizer(
+        float learning_rate = 0.001f,
+        float beta1 = 0.9f,
+        float beta2 = 0.999f,
+        float eps = 1e-8f
+    ) : lr(learning_rate), beta1(beta1), beta2(beta2), eps(eps) {}
+
+    // initialize optimizer state for parameters
+    void init(const std::map<std::string, std::optional<array>>& params) {
+        for (const auto& [name, param_opt] : params) {
+            if (!param_opt.has_value()) continue;
+            
+            const array& param = param_opt.value();
+            state[name] = State{
+                zeros_like(param), // m
+                zeros_like(param)  // v
+            };
+        }
+    }
+
+   // update parameters using gradients
+    void update(MyModule& model, const std::map<std::string, std::optional<array>>& grads, float max_norm = -1.0f) {
+        step_count++;
+        
+        // compute bias correction terms
+        float bc1 = 1.0f - std::pow(beta1, step_count);
+        float bc2 = 1.0f - std::pow(beta2, step_count);
+        float lr_t = lr * std::sqrt(bc2) / bc1;
+
+        // get current parameters
+        auto params = model.parameters();
+
+        // updated parameters to send back to model
+        std::map<std::string, std::optional<array>> updated_params;
+
+        for (const auto& [name, param_opt] : params) {
+            if (!param_opt.has_value() || grads.count(name) == 0) {
+                updated_params[name] = param_opt;
+                continue;
+            }
+
+            const array& param = param_opt.value();
+            const array& grad = grads.at(name).value();
+            auto& s = state[name];
+
+            // clip gradients if needed
+            array clipped_grad = grad;
+            if (max_norm > 0) {
+                array grad_norm = sqrt(sum(square(grad)));
+                array scale = minimum(array(max_norm), grad_norm) / grad_norm;
+                clipped_grad = multiply(grad, scale);
+            }
+            
+            // update momentum
+            s.m = add(
+                multiply(array(beta1), s.m.value()),
+                multiply(array(1.0f - beta1), clipped_grad)
+            );
+            
+            // update velocity 
+            s.v = add(
+                multiply(array(beta2), s.v.value()),
+                multiply(array(1.0f - beta2), square(clipped_grad))
+            );
+            
+            // compute update
+            array update = multiply(
+                array(lr_t),
+                divide(
+                    s.m.value(),
+                    add(sqrt(s.v.value()), array(eps))
+                )
+            );
+
+            // store updated parameter
+            updated_params[name] = subtract(param, update);
+        }
+
+        // update model parameters
+        model.update(updated_params);
+    }
+
+    // basic scheduler that reduces learning rate by factor after n steps
+    void schedule_lr(float factor, int after_steps) {
+        if (step_count > after_steps) {
+            lr *= factor;
+        }
+    }
+};
+
+constexpr size_t N_HEADS = 4;
+constexpr size_t N_LAYERS = 3;
 constexpr int HEAD_DIM = MODEL_DIM / N_HEADS; 
 
 class HeadLayerNorm : public MyModule {
@@ -255,6 +236,7 @@ class HeadLayerNorm : public MyModule {
     HeadLayerNorm() : MyModule("LayerNorm") {
         register_array(gamma, "gamma");
         register_array(beta, "beta");
+        DEBUG_NONE("layernorm reg complete");
     }
 
     array forward(array x) {
@@ -277,7 +259,6 @@ class Decoder : public MyModule  {
      HeadLayerNorm norm;
 
      Decoder() : MyModule("Decoder") {
-       DEBUG_NONE("initializing Decoder");
        register_array(attn_wq, "attn_wq");
        register_array(attn_wk, "attn_wk"); 
        register_array(attn_wv, "attn_wv");
@@ -286,91 +267,46 @@ class Decoder : public MyModule  {
        register_array(ffn_2, "ffn_2");
        register_array(layer_norm, "layer_norm");
        register_module(norm, "norm");
-       DEBUG_NONE("Decoder initialization complete");
+       DEBUG_NONE("decoder reg complete");
      }
 
    array forward(array x) {
-      DEBUG_NONE("Decoder forward pass start");
-      DEBUG_NONE("input shape: " << x.shape() << " values: " << x);
-
       array q = matmul(x, attn_wq);
-      eval(q);
-      DEBUG_NONE("query shape: " << q.shape() << " values: " << q);
-
       array k = matmul(x, attn_wk);
-      eval(k);
-      DEBUG_NONE("key shape: " << k.shape() << " values: " << k);
-
       array v = matmul(x, attn_wv);
-      eval(v);
-      DEBUG_NONE("value shape: " << v.shape() << " values: " << v);
-
+      
       array attn = reshape(matmul(q, reshape(k, {k.shape()[1], k.shape()[2], -1})) * sqrt(HEAD_DIM), {1, x.shape()[1], x.shape()[1]});
-      eval(attn);
-      DEBUG_NONE("attention scores shape: " << attn.shape() << " values: " << attn);
-
       attn = tril(attn);
-      eval(attn);
-
       x = softmax(attn, -1);
-      eval(x);
-      DEBUG_NONE("softmax attention shape: " << x.shape() << " values: " << x);
-
       x = matmul(x, v);
-      DEBUG_NONE("attention output shape: " << x.shape() << " values: " << x);
-
       x = matmul(x, ffn_1);
-      eval(x);
-      DEBUG_NONE("ffn1 output shape: " << x.shape() << " values: " << x);
-
       x = maximum(x, zeros_like(x));
-      eval(x);
-      DEBUG_NONE("relu output shape: " << x.shape() << " values: " << x);
-
       x = matmul(x, ffn_2);
-      eval(x);
-      DEBUG_NONE("ffn2 output shape: " << x.shape() << " values: " << x);
-
       x = norm.forward(x);
-      eval(x);
-      DEBUG_NONE("layer norm output shape: " << x.shape() << " values: " << x);
-
-      DEBUG_NONE("Decoder forward pass complete");
       return x;
    }
 };
 
 class MHA : public MyModule {
- public: 
-   std::array<Decoder, N_HEADS> heads;
-   array proj = random::normal({MODEL_DIM, MODEL_DIM});
+    public: 
+    std::array<Decoder, N_HEADS> heads;
 
-   MHA() : MyModule("MHA") {
-     DEBUG_NONE("initializing MHA");
-     register_module_array(heads, "head");
-     register_array(proj, "proj");
-     DEBUG_NONE("MHA initialization complete");
-   }
+    MHA() : MyModule("MHA"), heads{} {
+        for(size_t i = 0; i < N_HEADS; i++) {
+            register_module(heads[i], "head_" + std::to_string(i));
+        }
+    }
 
-   array forward(array x) {
-     DEBUG_NONE("MHA forward pass start");
-     DEBUG_NONE("input shape: " << x.shape() << " values: " << x);
-     
-     std::vector<array> outs{};
-     for (size_t i=0; i<N_HEADS; ++i) {
-       DEBUG_NONE("processing head " << i);
-       array head_out = heads[i].forward(x);
-       eval(head_out);
-       DEBUG_NONE("head " << i << " output shape: " << head_out.shape() << " values: " << head_out);
-       outs.push_back(head_out);
-     }
+    array forward(array x) {
+        std::vector<array> outs{};
+        for (size_t i=0; i<N_HEADS; ++i) {
+        array head_out = heads[i].forward(x);
+        outs.push_back(head_out);
+        }
 
-     array out = concatenate(outs, -1);
-     eval(out);
-     DEBUG_NONE("concatenated output shape: " << out.shape() << " values: " << out);
-     DEBUG_NONE("MHA forward pass complete");
-     return out;
-   }
+        array out = concatenate(outs, -1);
+        return out;
+    }
 };
 
 array test_card_embed(array x, array card_emb_w, array rank_emb_w, array suit_emb_w) {
@@ -393,9 +329,6 @@ array test_card_embed(array x, array card_emb_w, array rank_emb_w, array suit_em
   
   auto suit_embs = squeeze(gather(suit_emb_w, {suit_indices}, {0}, {1,MODEL_DIM}));
 
-  DEBUG_NONE("card_embs shape after gather:" << card_embs.shape());
-
-  // Now each embs should be [2, MODEL_DIM]
   auto embs = add(add(card_embs, rank_embs), suit_embs);
 
   embs = multiply(embs, expand_dims(valid, 1));
@@ -410,36 +343,28 @@ class PokerGPT : public MyModule {
    array suit_emb_w = random::normal({4, MODEL_DIM});
    array bet_proj_w = random::normal({1, MODEL_DIM});
    array action_head = random::normal({MODEL_DIM, NUM_ACTIONS});
-   std::array<MHA, NUM_LAYERS> layers; 
+   std::array<MHA, N_LAYERS> layers; 
 
    PokerGPT() : MyModule("PokerGPT") {
-     DEBUG_NONE("initializing PokerGPT");
+     //DEBUG_NONE("initializing PokerGPT");
      register_array(card_emb_w, "card_emb_w");
      register_array(rank_emb_w, "rank_emb_w");
      register_array(suit_emb_w, "suit_emb_w");
      register_array(bet_proj_w, "bet_proj_w");
      register_array(action_head, "action_head");
-     register_module_array(layers, "layers");
-     DEBUG_NONE("PokerGPT initialization complete");
+     for(size_t i = 0; i < N_LAYERS; i++) {
+        std::string layer_name = "layer_" + std::to_string(i);
+        register_module(layers[i], layer_name);  // register each head directly
+     }
+    DEBUG_NONE("pokergpt reg complete");
    }
 
    array forward(array cards, array bets, array round_ids, std::vector<int>& vec_pos_ids) {
       auto BS = cards.shape()[0];
-      DEBUG_NONE("PokerGPT forward pass start");
-      DEBUG_NONE("input cards shape: " << cards.shape() << " values: " << cards);
-      DEBUG_NONE("input bets shape: " << bets.shape() << " values: " << bets);
-      DEBUG_NONE("input round_ids shape: " << round_ids.shape() << " values: " << round_ids);
-      
+  
       auto card_emb = test_card_embed(cards, card_emb_w, rank_emb_w, suit_emb_w);
-      eval(card_emb);
-      DEBUG_NONE("card embeddings shape: " << card_emb.shape() << " values: " << card_emb);
       bets = matmul(reshape(bets, {BS,-1, 1}), bet_proj_w);
-      eval(bets);
-      DEBUG_NONE("projected bets shape: " << bets.shape() << " values: " << bets);
-
       array pos_ids = make_pos_ids(vec_pos_ids);
-      eval(pos_ids);
-      DEBUG_NONE("position ids shape: " << pos_ids.shape() << " values: " << pos_ids);
 
       array round_pe = get_round_encoding();
       array action_pe = get_action_encoding();
@@ -451,18 +376,11 @@ class PokerGPT : public MyModule {
       array concat_round_pos = concatenate({preflop, flop, turn, river}, 0); 
 
       bets = add(add(bets, concat_round_pos), repeat(action_pe, 4, 0));
-      eval(bets);
-      DEBUG_NONE("final bets shape: " << bets.shape() << " values: " << bets);
 
       array x = concatenate({card_emb, bets}, 1);
-      eval(x);
-      DEBUG_NONE("concatenated input shape: " << x.shape() << " values: " << x);
 
       for (size_t i=0; i<NUM_LAYERS; ++i) {
-        DEBUG_NONE("processing layer " << i);
         x = layers[i].forward(x);
-        eval(x);
-        DEBUG_NONE("layer " << i << " output shape: " << x.shape() << " values: " << x);
       }
 
       array last_tokens = slice(
@@ -471,19 +389,12 @@ class PokerGPT : public MyModule {
         {x.shape(0), x.shape(1), x.shape(2)}
       );
 
-      DEBUG_NONE("last_tokens: " << last_tokens.shape());
       array out = matmul(last_tokens, action_head);
-      eval(out);
-      DEBUG_NONE("final output shape: " << out.shape() << " values: " << out);
-      DEBUG_NONE("PokerGPT forward pass complete");
       return out;
    }
 
    array make_pos_ids(const std::vector<int>& pos) {
-       DEBUG_NONE("making position ids from vector of size: " << pos.size());
        array arr = array(pos.data(), {static_cast<int>(pos.size())});
-       eval(arr);
-       DEBUG_NONE("created position ids shape: " << arr.shape() << " values: " << arr);
        return arr;
    }
 
@@ -522,9 +433,6 @@ class PokerGPT : public MyModule {
       array sin_col_indices = reshape(multiply(arange(dim/2), array(2)), {-1});  // [0,2,4...]
       array sin_cols = repeat(sin_col_indices, length);
       
-      // Reshape updates to match ndim requirements (indices.ndim() + a.ndim())
-      // indices has shape [N], a has shape [length, dim]
-      // so updates needs shape [N, 1, 1]
       array sin_updates = reshape(sin_vals, {length * dim/2, 1, 1});
       array cos_updates = reshape(cos_vals, {length * dim/2, 1, 1});
       
@@ -604,35 +512,6 @@ array mse_loss(
     array loss = square(subtract(predictions, targets));
     return reduce(loss, reduction);
 }
-void test_parameter_update() {
-   PokerGPT gpt;
-   
-   // get params and print
-   auto params = gpt.parameters();
-   for (const auto& [path, arr] : params) {
-       DEBUG_NONE("param " << path << " shape: " << arr.value().shape());
-   }
-
-   // create zero params map 
-   std::map<std::string, std::optional<array>> zero_params;
-   for (const auto& [path, arr] : params) {
-       zero_params[path] = zeros_like(arr.value());
-   }
-
-   DEBUG_NONE("created zero params, updating model...");
-   
-   // update model
-   gpt.update(zero_params);
-   
-   // verify all params are zero
-   auto new_params = gpt.parameters();
-   for (const auto& [path, arr] : new_params) {
-       // sum should be 0 for all
-       array sum = mlx::core::sum(arr.value());
-       eval(sum);
-       DEBUG_NONE("param " << path << " sum: " << sum.item<float>());
-   }
-}
 
 void test_mlx() {
     int n_players = 2;
@@ -642,7 +521,8 @@ void test_mlx() {
     array card_emb_w = random::normal({52, MODEL_DIM});
     array rank_emb_w = random::normal({13, MODEL_DIM});
     array suit_emb_w = random::normal({4, MODEL_DIM});
-    // define test hand, flops, turns, rivers, bet_fracs, bet_status
+    
+    // define test inputs
     array hand = array({10, 10}, {1,2});
     std::vector<int> pos_vec(NUM_PLAYERS * MAX_ROUND_BETS);
     std::iota(pos_vec.begin(), pos_vec.end(), 0);
@@ -650,38 +530,294 @@ void test_mlx() {
     array bets = zeros({1, NUM_PLAYERS*MAX_ROUND_BETS*4});
 
     PokerGPT gpt;
+    AdamOptimizer opt(0.001f);
+    opt.init(gpt.parameters());
 
-    test_parameter_update();
+    size_t n_params = 0; 
+    for (auto& [name, param_opt] : gpt.parameters()) {
+        DEBUG_NONE("name: " << name);
+        DEBUG_NONE("n_params: " <<param_opt.value().size());
+        if (param_opt.has_value()) {
+            n_params += param_opt.value().size();
+        }
+    }
+    DEBUG_NONE("n params: " << n_params);
+
+    DEBUG_NONE("init opt");
+    array targets = zeros(gpt.forward(hand, bets, round_ids, pos_vec).shape());
+      // define loss function that takes vector of arrays instead of map
+    auto loss_fn = [&](const std::vector<array>& param_arrays) {
+        // construct parameter map from vector
+        auto param_map = gpt.parameters();
+        int i = 0;
+        for (auto& [name, param_opt] : param_map) {
+            if (param_opt.has_value()) {
+                param_opt = param_arrays[i++];
+            }
+        }
+        
+        gpt.update(param_map);
+        
+        array preds = gpt.forward(hand, bets, round_ids, pos_vec);
+        // compute loss
+        return smooth_l1_loss(preds, targets);
+    };
+
+    DEBUG_NONE("got targets");
+    // training loop
+    for (int step = 0; step < 1000; step++) {
+        std::vector<array> param_arrays;
+        std::vector<int> argnums;
+        int param_idx = 0;
+        for (const auto& [name, param_opt] : gpt.parameters()) {
+            if (param_opt.has_value()) {
+                param_arrays.push_back(param_opt.value());
+                argnums.push_back(param_idx);
+                param_idx++;
+            }
+        }
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto grad_fn = mlx::core::value_and_grad(loss_fn, argnums);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
+        DEBUG_NONE("step took " << duration.count() << " us");
+        auto [losses, grads] = grad_fn(param_arrays);
+
+        std::map<std::string, std::optional<array>> grad_map;
+        int i = 0;
+        for (const auto& [name, param_opt] : gpt.parameters()) {
+            if (param_opt.has_value()) {
+                grad_map[name] = grads[i++];
+            }
+        }
+
+        opt.update(gpt, grad_map);
+
+        eval(losses);
+        
+        DEBUG_NONE("loss val: " << losses.item<float>());
+
+        if (step % 10 == 0) {
+            std::cout << "Step " << step << " Loss: " << losses << std::endl;
+        }
+    }
+}
+
+// assumes csv files are in a folder called 'mnist_data' in the current directory
+std::string train_file = "/Users/minjunes/Downloads/mnist/mnist_train.csv"; 
+std::string test_file = "/Users/minjunes/Downloads/mnist/mnist_test.csv";
+
+class MLPNet : public MyModule {
+  public:
+   array l1 = random::normal({784, 256}) * sqrt(2.0f/784); // he initialization
+   array l2 = random::normal({256, 128}) * sqrt(2.0f/256);
+   array l3 = random::normal({128, 64}) * sqrt(2.0f/128);
+   array head = random::normal({64, 10}) * sqrt(2.0f/64);
+   float dropout_rate = 0.15f;
+
+   MLPNet() : MyModule("MLPNet") {
+     register_array(l1, "l1");  
+     register_array(l2, "l2");
+     register_array(l3, "l3");
+     register_array(head, "head");
+   }
+   
+   array forward(array x, bool training = true) {
+    x = reshape(x, {-1, 784});
+     
+    x = matmul(x, l1);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, l2);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, l3);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, head);
+    return softmax(x);
+}
+};
+
+array one_hot(const array& indices, int num_classes) {
+    // get batch size from indices shape
+    auto bs = indices.shape()[0];
     
-    array preds = gpt.forward(hand, bets, round_ids, pos_vec);
-    array y = random::normal(preds.shape());
-
-    array loss = smooth_l1_loss(preds, y);
-    // much simpler - just compute loss directly
-    // get value and all gradients 
-    auto value_and_grad_fn = mlx::core::value_and_grad([&](const std::vector<array>& params) {
-        return loss;
-    });
-
-    // extract current params
-    std::vector<array> current_params;
-    auto param_map = gpt.parameters();
-    for (const auto& [_, param] : param_map) {
-        current_params.push_back(param.value());
+    // create output array of zeros [bs, num_classes]
+    array out = zeros({bs, num_classes});
+    
+    // create row indices for scatter
+    array row_indices = arange(bs);
+    
+    // scatter 1s into the right positions
+    return scatter(out, 
+                  {row_indices, astype(indices, int32)},
+                  ones({bs, 1, 1}),
+                  {0, 1});
+}
+ 
+std::pair<array,array> load_batch(const std::string& csv_file, int batch_size) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    
+    std::ifstream file(csv_file);
+    if (!file.is_open()) {
+        throw std::runtime_error("failed to open file: " + csv_file);
     }
 
-    // compute loss value and grads
-    auto [loss_val, grads] = value_and_grad_fn(current_params);
-
-    // map grads to param names
-    std::map<std::string, array> grad_map;
-    int i = 0;
-    for (const auto& [name, _] : param_map) {
-        grad_map[name] = grads[i++];
+    // count total lines first time (could cache this)
+    int total_lines = 0;
+    std::string line;
+    while (std::getline(file, line)) total_lines++;
+    
+    // subtract 1 if there's a header
+    try {
+        std::stof(line.substr(0, line.find(',')));
+    } catch (...) {
+        total_lines--;
     }
 
-    AdamOptimizer opt(gpt);
-    opt.step(grad_map);
+    // randomly seek to a position
+    std::uniform_int_distribution<> dis(0, total_lines - batch_size);
+    int start_pos = dis(gen);
+    
+    file.clear();
+    file.seekg(0);
+    
+    // skip header if present
+    std::getline(file, line);
+    
+    // skip to random position
+    for (int i = 0; i < start_pos; i++) {
+        std::getline(file, line);
+    }
 
-  return;
+    // rest of the function same as before
+    std::vector<float> images;
+    std::vector<float> labels;
+    
+    int curr_bs = 0;
+    while(std::getline(file, line) && curr_bs < batch_size) {
+        std::stringstream lineStream(line);
+        std::string cell;
+        
+        // first entry in each row is the label
+        if (!std::getline(lineStream, cell, ',')) {
+        throw std::runtime_error("missing label value at row " + std::to_string(curr_bs+1)); 
+        }
+        try {
+        labels.push_back(std::stof(cell));
+        } catch (const std::exception& e) {
+        throw std::runtime_error("invalid label value '" + cell + "' at row " + std::to_string(curr_bs+1)); 
+        }
+        
+        // remaining 784 entries are the pixel values
+        int pixel_idx = 0;  
+        while(std::getline(lineStream, cell, ',')) {
+        try {
+            images.push_back(std::stof(cell) / 255.0); // scale to [0,1]
+        } catch (const std::exception& e) {
+            throw std::runtime_error("invalid pixel value '" + cell + "' at row " + std::to_string(curr_bs+1) + ", column " + std::to_string(pixel_idx+1));
+        }
+        pixel_idx++;
+    }
+
+    if (pixel_idx != 784) {
+      throw std::runtime_error("expected 784 pixel values but got " + std::to_string(pixel_idx) + " at row " + std::to_string(curr_bs+1));
+    }
+    
+    curr_bs++;  
+  }
+
+    array x = array(images.data(), {curr_bs, 784});
+    array y = array(labels.data(), {curr_bs});
+    return {x,y};
+}
+
+void test_mnist() {
+    mlx::core::set_default_device(Device::gpu);
+    MLPNet mlp;
+    AdamOptimizer opt(0.001f);
+    opt.init(mlp.parameters());
+
+    int batch_size = 1024;  // smaller batch to start
+    int num_train_iters = 10000;
+    int log_interval = 1;  // more frequent logging
+
+    auto loss_fn = [&](const std::vector<array>& param_arrays) {
+        auto param_map = mlp.parameters();
+        int i = 0;
+        for (auto& [name, param_opt] : param_map) {
+            if (param_opt.has_value()) {
+                param_opt = param_arrays[i++];
+            }
+        }
+        
+        mlp.update(param_map);
+        
+        auto [x, y_indices] = load_batch(train_file, batch_size);
+        array y = one_hot(y_indices, 10);
+        array logits = mlp.forward(x);
+        array log_probs = log(logits + 1e-10);
+        array prod = multiply(y, log_probs);
+        array summed = sum(prod, -1);
+        array loss = -mean(summed);
+        return std::vector<array>{loss};
+    };
+
+    for (int step = 1; step <= num_train_iters; step++) {
+        std::vector<array> param_arrays;
+        std::vector<int> argnums;
+        int param_idx = 0;
+        
+        for (const auto& [name, param_opt] : mlp.parameters()) {
+            if (param_opt.has_value()) {
+                param_arrays.push_back(param_opt.value());
+                argnums.push_back(param_idx);
+                param_idx++;
+            }
+        }
+
+        auto grad_fn = mlx::core::value_and_grad(loss_fn, argnums);
+        auto [losses, grads] = grad_fn(param_arrays);
+        array loss_val = losses[0];
+
+        std::map<std::string, std::optional<array>> grad_map;
+        int i = 0;
+        for (const auto& [name, param_opt] : mlp.parameters()) {
+            if (param_opt.has_value()) {
+                grad_map[name] = grads[i++];
+            }
+        }
+
+        opt.update(mlp, grad_map);
+        eval(loss_val);  // make sure we eval loss
+
+        if (step % log_interval == 0) {
+            auto [test_x, test_y_indices] = load_batch(test_file, batch_size);
+            array test_preds = mlp.forward(test_x);
+            array pred_indices = argmax(test_preds, -1);
+            array accuracy = mean(astype(equal(pred_indices, test_y_indices), float32));
+            
+            eval(accuracy);
+            
+            std::cout << "step " << step 
+                << " loss: " << loss_val.item<float>()
+                << " test accuracy: " << accuracy.item<float>() 
+                << std::endl;
+        }
+    }
 }
