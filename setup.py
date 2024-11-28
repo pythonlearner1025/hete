@@ -23,6 +23,7 @@ else:
     raise OSError("Unsupported operating system")
 libtorch_include_dir = os.path.join(libtorch_path, "include")
 libtorch_lib_dir = os.path.join(libtorch_path, "lib")
+mlx_path = "/Users/minjunes/hete/mlx" if platform.system() == "Darwin" else None
 
 ext_modules = [
     Pybind11Extension(
@@ -33,6 +34,7 @@ ext_modules = [
             os.path.join(libtorch_include_dir, "torch",  "csrc", "api", "include"),
             ompeval_include_dir,
             src_dir,
+            mlx_path,  # Add MLX include path
         ],
         library_dirs=[
             libtorch_lib_dir,

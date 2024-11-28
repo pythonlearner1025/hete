@@ -1,7 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <torch/script.h>
-#include "model/model.h"
+#include "../src/model/model.h"  
 #include <array>
 
 namespace py = pybind11;

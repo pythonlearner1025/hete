@@ -3,7 +3,7 @@
 
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
-constexpr size_t NUM_TRAVERSALS = 1000;
+constexpr size_t NUM_TRAVERSALS = 100;
 constexpr size_t MAX_SIZE = 1e7; // Adjust this based on your expected maximum number of advantages
 constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include "../debug.h"
+#include <random>
 #include <mlx/mlx.h>
 
 /**

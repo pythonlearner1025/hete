@@ -69,7 +69,6 @@ struct Advantage {
         int depth_ = 0,
         int unprocessed_children_ = 0,
         double sampling_prob_ = 0
-        int unprocessed_children_ = 0
     ) :
         values(values_),
         strat(strat_),
@@ -80,7 +79,6 @@ struct Advantage {
         depth(depth),
         unprocessed_children(unprocessed_children_),
         sampling_prob(sampling_prob_)
-        unprocessed_children(unprocessed_children_)
     {
         if (values_.empty()) {
             values.fill(0.0);
@@ -610,7 +608,6 @@ int main() {
             opt.init(gpt.parameters()); //fresh params
             gpt.to_bfloat16();
 
-
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             DEBUG_NONE("TRAIN_ITERS = " << train_iters);
             DEBUG_WRITE(logfile, "TRAIN_ITERS = " << train_iters);
@@ -626,18 +623,13 @@ int main() {
                     }
                 }
 
-                //DEBUG_NONE("update params");
                 gpt.update(param_map);
                 
                 array preds = gpt.forward(arg_arrays[0], arg_arrays[1]);
-                //DEBUG_NONE("preds: " << preds.shape());
-                //DEBUG_NONE("tragets: " << arg_arrays[2].shape());
-                // compute loss
                 return smooth_l1_loss(squeeze(preds), arg_arrays[2]);
             };
 
             for (size_t train_iter = 0; train_iter < train_iters; ++train_iter) {
-                // Rotate and shuffle window
                 std::vector<array> hands_vec;
                 std::vector<array> bets_vec;
                 std::vector<std::vector<double>> target_regrets;
@@ -659,8 +651,6 @@ int main() {
 
                 array batched_hands = reshape(concatenate(hands_vec, 0), {TRAIN_BS, -1});
                 array batched_bets = reshape(concatenate(bets_vec, 0), {TRAIN_BS, -1});
-                //DEBUG_NONE("batched_hands: " << batched_hands.shape());
-                //DEBUG_NONE("batched_bets: " << batched_bets.shape());
                 std::vector<double> flattened_regrets;
                 flattened_regrets.reserve(target_regrets.size() * NUM_ACTIONS);
                 for (const auto& regret_vec : target_regrets) {
@@ -670,7 +660,6 @@ int main() {
                                             {static_cast<int>(target_regrets.size()), 
                                                 static_cast<int>(NUM_ACTIONS)}, 
                                             float32);
-                //DEBUG_NONE("batched_regrets: " << batched_regrets.shape());
                 auto start = std::chrono::steady_clock::now();
                 
                 std::vector<array> param_arrays = {batched_hands, batched_bets, batched_regrets};
@@ -688,8 +677,6 @@ int main() {
 
                 auto [losses, grads] = grad_fn(param_arrays); 
 
-                //DEBUG_NONE("losses: " << losses.shape());
-
                 std::map<std::string, std::optional<array>> grad_map;
                 int i = 0;
                 for (const auto& [name, param_opt] : gpt.parameters()) {
@@ -701,8 +688,6 @@ int main() {
                 opt.update(gpt, grad_map);
 
                 eval(losses);
-
-                //DEBUG_NONE("loss val: " << losses.item<float>());
 
                 auto end = std::chrono::steady_clock::now();
                 auto step_tm = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();

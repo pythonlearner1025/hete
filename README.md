@@ -49,13 +49,16 @@ then, build the lib:
 
 ```mkdir build && cd build && cmake .. && make```
 
+building the python extension:
+
+```python setup.py build_ext --inplace```
+
 # running
 
 To train a neural network using Deep-CFR, set your parameters in constants.h and run:
 
 ```make && ./main```
 
-# evaluations
+# evaluating
 
-
-
+Install the required pip dependencies and run eval.py to play a trained model against slumbot. The code can optionally save/stream performance against slumbot to local file or wandb.
