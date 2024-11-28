@@ -1,11 +1,8 @@
-from poker_inference import forward
-
 import requests
 import sys
 import argparse
 import os
 import wandb
-
 from model import PokerGPT, ModelConfig, regret_match_mx, model_forward
 host = 'slumbot.com'
 
@@ -302,27 +299,6 @@ def get_bets(fracs):
     assert len(ret) == MAX_ROUND_BETS * 4 * NUM_PLAYERS
     return ret
 
-def net_forward(player_models, player_idx, hand, board, status, fracs):
-    assert len(status) == len(fracs)
-    hand = [card2int(h) for h in hand]
-    board += [None] * (5-len(board))
-    flops = [card2int(c) for c in board[:3]]
-    turn = card2int(board[3]) 
-    river = card2int(board[4])
-    bet_status = status + [0] * (MAX_ROUND_BETS*NUM_PLAYERS*4 - len(status))
-    bet_fracs = fracs + [0] * (MAX_ROUND_BETS*NUM_PLAYERS*4 - len(fracs))    
-    
-    logits = forward(
-        player_models[player_idx],
-        hand,
-        flops,
-        turn,
-        river,
-        bet_fracs,
-        bet_status
-    )
-    
-    return logits
 
 def mask_illegals(logits, pot, min_bet_amt):
     for i in range(2, len(logits)):
@@ -362,7 +338,7 @@ def PlayHand(player_models, token):
     print('Token: %s' % token)
 
     # pos is randomly assigned
-    # so query right net based on pos
+    # so query right  based on pos
     #  Blinds of 50 and 100, stack sizes of 200 BB
     status = [] 
     fracs = [] 
