@@ -6,12 +6,16 @@ __pycache__/
 build/
 ompeval.cpython-312-darwin.so
 .vscode/
+mlx/
 
 *.pt
 
 ompeval.egg-info/
 out/
 *.so
+wandb/
+tempbuild/
+llama.cpp/
 
 # ignore 
 *.deb

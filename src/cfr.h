@@ -6,16 +6,14 @@
 #include <tuple>
 #include <torch/torch.h>
 #include "engine.h"
-#include "model/model.h"
 #include "constants.h"
 #include "util.h"
-#include "eval.h"
 
 // Define a structure for traverse advantages
 struct TraverseAdvantage {
     State state;
     int iteration;
-    std::array<double, NUM_ACTIONS> advantages;
+    std::array<double, NUM_ACTIONS> regrets;
 };
 
 // The traverse function
