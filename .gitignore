@@ -12,6 +12,8 @@ ompeval.cpython-312-darwin.so
 ompeval.egg-info/
 out/
 *.so
+mlx/
+wandb/
 
 # ignore 
 *.deb

@@ -1,12 +1,36 @@
-# hete (WIP)
+# Hete
 
-Hete is a library for training neural network based poker bots. The goal of the library is  The library comes with a lightweight poker engine, a Deep-CFR implementation, and a 100,000 parameter neural network written in torch. Lightning fast hand evaluations are performed using the fantasic OMPEval library.   
+Hete is a performant Deep-CFR network trainer in c++ using [mlx](https://github.com/ml-explore/mlx).
+
+Features: 
+- Decoder only poker GPT in one file ```src/models/model.h``` 
+- Minimal 2+ player poker engine
+- Monte carlo outcome sampler for game rollouts 
+- CFR training loop
+- Fast hand evaluations using OMPEval library.   
+
+# performance
+
+terminology:
+- mbb = 1/1000 * big blind
+- baseline statistics = difference between outcome of you played vs. how slumbot would have played. more positive is better.
+- mbb_per_hand = average mbb winning across 10000 games
+
+Winning by 50mbb or more per hand on average is considered a significant win between professionals.
+
+Performance of my latest run against [slumbot.com](https://www.slumbot.com/)
+
+![mbb_per_hand](https://github.com/pythonlearner1025/hete/blob/master/mbb.png?raw=true)
+
+![baseline_avg](https://github.com/pythonlearner1025/hete/blob/master/baseline.png?raw=true)
+
+There's work to do.
 
 # installing 
 
-There are two dependencies, OMPEval and libtorch.
+There are two dependencies, OMPEval and mlx.
 
-clone OMPEval:
+clone mlx:
 
 ```git submodule update --init --recursive```
 
@@ -32,23 +56,6 @@ To train a neural network using Deep-CFR, set your parameters in constants.h and
 ```make && ./main```
 
 # evaluations
-
-Currently Local Best Response (LBR) is used to evaluate relative strength of bot throughout training. 
-
-LBR:
-best response BR(strat) = max strat' payoff(strat', opp_strat)
-where payoff(strat', opp_strat) is the expected poyoff 
-playing according to strat' assuming opp plays deterministically following opp_strat
-
-exploitability is defined as difference between
-payoff(strat*, BR(strat*)) - payoff(strat, BR(strat))
-where strat* is the Nash equilibrium strategy
-the lower the better
-
-# TODO
-
-- training checkpoints
-- chart progress against slumbot, or code is wrong
 
 
 
