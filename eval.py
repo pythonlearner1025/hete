@@ -573,6 +573,7 @@ def auto(log_path, start_iter, num_hands=10, use_wandb=True, config={}, resume="
                 'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
             }
 
+
             if use_wandb:
                 wandb.log(eval_results)
 

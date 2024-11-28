@@ -24,6 +24,7 @@ void get_state(
 float sample_uniform(); 
 std::array<double, NUM_ACTIONS> sample_prob(const mlx::core::array logits); 
 std::array<double, NUM_ACTIONS> regret_match(const mlx::core::array logits);
+
 template <typename T, std::size_t N>
 std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr) {
     T sum = std::accumulate(arr.begin(), arr.end(), static_cast<T>(0));

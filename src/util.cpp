@@ -28,6 +28,12 @@ float sample_uniform() {
     return dist(rng); // Thread-safe random float between 0 and 1
 }
 
+float sample_uniform() {
+    thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    return dist(rng); // Thread-safe random float between 0 and 1
+}
+
 int sample_iter(size_t max_iter) {
     if (max_iter == 0) {
         return 0;
@@ -170,6 +176,7 @@ void save_model(std::map<std::string, std::optional<mlx::core::array>> params, c
         if (param_opt.has_value()) {
             save_map.emplace(name, param_opt.value());
         }
+
     }
     save_safetensors(filepath, save_map);
 }

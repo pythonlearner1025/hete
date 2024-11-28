@@ -69,6 +69,7 @@ struct Advantage {
         int depth_ = 0,
         int unprocessed_children_ = 0,
         double sampling_prob_ = 0
+        int unprocessed_children_ = 0
     ) :
         values(values_),
         strat(strat_),
@@ -79,6 +80,7 @@ struct Advantage {
         depth(depth),
         unprocessed_children(unprocessed_children_),
         sampling_prob(sampling_prob_)
+        unprocessed_children(unprocessed_children_)
     {
         if (values_.empty()) {
             values.fill(0.0);
@@ -207,6 +209,7 @@ void outcome_sampling(
     thread_local std::mt19937 rng(std::random_device{}());
     std::map<std::tuple<int, int>, std::shared_ptr<PokerGPT>> cache;
 
+
     // For each traversal
     for (int t = 0; t < traversals; ++t) {
         DEBUG_NONE("cfr_iter="<<cfr_iter<<" thread="<<thread_id<<" traversal= "<<t<<"/"<<traversals<<" cfr_iter_advs="<<format_scientific(cfr_iter_advs.load()));
@@ -311,6 +314,7 @@ void outcome_sampling(
                     }
 
                     int action = sample_action(sampling_strategy);
+
 
                     while (!verify_action(&engine, current_player, action, logfile)) {
                         DEBUG_WRITE(logfile, "invalid action=" << action << "trying next " << (action - 1 + NUM_ACTIONS) % NUM_ACTIONS);
@@ -605,6 +609,7 @@ int main() {
             AdamOptimizer opt(0.001f);
             opt.init(gpt.parameters()); //fresh params
             gpt.to_bfloat16();
+
 
             DEBUG_NONE("TRAIN_BS = " << train_bs);
             DEBUG_NONE("TRAIN_ITERS = " << train_iters);

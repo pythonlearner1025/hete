@@ -52,6 +52,7 @@
 
 // New macro to write to a log file specified by path
 #if DEBUG_LEVEL == DEBUG_LEVEL_WRITE //|| DEBUG_LEVEL == 0
+
     #define DEBUG_WRITE(log_file_path, ...) \
         do { \
             std::ofstream log_file(log_file_path, std::ios::app); \

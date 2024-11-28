@@ -14,6 +14,7 @@ constexpr size_t NUM_THREADS = 1;
 constexpr float BETA = 0;
 constexpr double EPSILON = 0.6;
 constexpr int PRINT_PER = 1;
+
 // engine
 constexpr int MAX_ROUND_BETS = 6;
 constexpr int BOARD_SIZE = 5;
