@@ -850,6 +850,10 @@ void PokerEngine::manual_deal_board(const std::array<int, 5> board_cards) {
     } 
 }
 
+int PokerEngine::get_round() const {
+    return this->round;
+}
+
 /* queries */
 std::array<double, NUM_PLAYERS> PokerEngine::get_finishing_stacks() const {
     std::array<double, NUM_PLAYERS> stacks;

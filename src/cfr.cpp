@@ -188,6 +188,12 @@ void init_constants_log(std::string constant_log_file) {
     }
 }
 
+double get_fold_exploration(double epsilon, int cfr_iter, bool is_preflop) {
+    // Higher epsilon for folds preflop to encourage more calls/raises
+    double base_gain = is_preflop ? 2 : 1.5;  // Increased preflop epsilon
+    return base_gain*epsilon;
+}
+
 void outcome_sampling(
     int thread_id,
     int player, 
@@ -291,6 +297,8 @@ void outcome_sampling(
                         }
                     }
 
+                    auto epsilon = std::max(EPSILON, 1.0 / std::sqrt(cfr_iter));  // Decay exploration over time
+
                     std::array<double, NUM_ACTIONS> sampling_strategy{0.0};
                     if (all_legal_actions_zero && num_legal_actions > 0) {
                         // corner case: uniform over legal actions
@@ -303,7 +311,11 @@ void outcome_sampling(
                     } else if (num_legal_actions > 0) {
                         // normal case: epsilon exploration over non-zero strat actions
                         for (int a = 0; a < NUM_ACTIONS; ++a) {
-                            sampling_strategy[a] = (1.0 - EPSILON) * strategy[a] + EPSILON / NUM_ACTIONS;
+                            if (a == 0) {
+                                sampling_strategy[a] = strategy[a] * (1.0 - get_fold_exploration(epsilon, cfr_iter, engine.get_round() == 0));
+                            } else {
+                                sampling_strategy[a] = (1.0 - epsilon) * strategy[a] + epsilon / NUM_ACTIONS;
+                            }
                             if (strategy[a] == 0) sampling_strategy[a] = 0;
                         }
                         sampling_strategy = normalize_to_prob_dist(sampling_strategy);
@@ -312,7 +324,6 @@ void outcome_sampling(
                     }
 
                     int action = sample_action(sampling_strategy);
-
 
                     while (!verify_action(&engine, current_player, action, logfile)) {
                         DEBUG_WRITE(logfile, "invalid action=" << action << "trying next " << (action - 1 + NUM_ACTIONS) % NUM_ACTIONS);

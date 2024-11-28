@@ -509,6 +509,7 @@ array smooth_l1_loss(
     const array& predictions,
     const array& targets,
     float beta = 1.0f,
+    float l2_lambda = 0.01f,  // Add L2 regularization parameter
     Reduction reduction = Reduction::MEAN
 ) {
     if (predictions.shape() != targets.shape()) {
@@ -518,19 +519,25 @@ array smooth_l1_loss(
         throw std::invalid_argument(msg.str());
     }
 
+    // Calculate smooth L1 loss
     array diff = subtract(predictions, targets);
     array squared_loss = multiply(array(0.5f / beta), square(diff));
     array abs_loss = subtract(abs(diff), array(0.5f * beta));
     
-    array loss = where(
+    array smooth_l1 = where(
         less(abs(diff), array(beta)),
         squared_loss,
         abs_loss
     );
 
-    return reduce(loss, reduction);
-}
+    // Add L2 regularization term
+    array l2_term = multiply(array(l2_lambda), sum(square(predictions)));
+    
+    // Combine losses
+    array total_loss = add(smooth_l1, l2_term);
 
+    return reduce(total_loss, reduction);
+}
 array mse_loss(
     const array& predictions,
     const array& targets,
