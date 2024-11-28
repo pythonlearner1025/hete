@@ -14,7 +14,7 @@ from typing import List, Optional
 @dataclass
 class ModelConfig:
     model_dim: int = 128
-    num_layers: int = 3
+    num_layers: int = 1
     num_heads: int = 4
     num_players: int = 2
     num_actions: int = 6
@@ -201,7 +201,7 @@ def model_forward(model, hands, bets):
 def inference():
     config = ModelConfig()
     model = PokerGPT(config)
-    path = '/Users/minjunes/hete/out/20241109061603/1/0/model.safetensors'
+    path = '/Users/minjunes/hete/out/20241109075618/9/0/model.safetensors'
     with safe_open(path, framework="pt") as f:
         # gets metadata + tensor names without loading the tensors
         metadata = f.metadata()
@@ -248,5 +248,12 @@ def train():
             print(f"Step {step}, Loss: {value}")
 
 if __name__ == "__main__":
+    import wandb
+
+    api = wandb.Api()
+    runs = api.runs("")
+    for i in runs:
+        print("run name = ",i.name," id: ", i.id)
+
     #inference()
-    train()
+    #train()

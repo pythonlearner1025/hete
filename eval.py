@@ -515,17 +515,22 @@ def Login(username, password):
     return token
 
 
-def auto(log_path, start_iter, num_hands=10, use_wandb=True, config={}, run_name="", mlx=True):
+def auto(log_path, start_iter, num_hands=10, use_wandb=True, config={}, resume="", mlx=True):
     model_config = ModelConfig()
     model_config.update_from_dict(config) 
     import time
     eval_cfr_iter = start_iter
     if use_wandb:
         print("initializing wandb")
+        kwargs = {}
+        if resume:
+            kwargs["id"] = resume
+            kwargs["resume"] = "must"
         wandb.init(
             project = "poker ai",
             config={**config},
-            name=run_name
+            name=run_name,
+            **kwargs
         )
 
     while 1:
@@ -604,6 +609,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb', type=int, default=1)
     parser.add_argument('--name', type=str, default="")
     parser.add_argument('--mlx', type=int, default=1)
+    parser.add_argument('--resume', type=str, default="")
     args = parser.parse_args()
     username = args.username
     password = args.password
@@ -617,6 +623,7 @@ if __name__ == '__main__':
     use_wandb = args.wandb
     run_name = args.name
     mlx = args.mlx
+    resume = args.resume
 
     if not log_path:
         log_path = os.path.join('./out',sorted(os.listdir('out'))[-1])
@@ -627,7 +634,7 @@ if __name__ == '__main__':
     NUM_PLAYERS, MODEL_DIM, NUM_HEADS, N_LAYERS, NUM_ACTIONS, MAX_ROUND_BETS, _, _, _, _ = tuple(config.values())
 
     if automatic:
-        auto(log_path, start_iter, num_hands=num_hands, use_wandb=use_wandb, config=config, run_name=run_name, mlx=mlx)
+        auto(log_path, start_iter, num_hands=num_hands, use_wandb=use_wandb, config=config, mlx=mlx, resume=resume)
         exit(-1)
 
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']

@@ -6,7 +6,6 @@
 #include <tuple>
 #include <torch/torch.h>
 #include "engine.h"
-#include "model/model.h"
 #include "constants.h"
 #include "util.h"
 

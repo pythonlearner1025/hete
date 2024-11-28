@@ -15,7 +15,7 @@
 #include <cmath>
 #include <sstream> 
 #include <memory>
-#include "model/mlxmodel.h"
+#include "model/model.h"
 
 struct RandInit {
     RandInit() { std::srand(static_cast<unsigned int>(std::time(nullptr))); }
@@ -499,15 +499,17 @@ int main() {
     init_constants_log(const_log_filename);
 
     {
-        DeepCFRModel model;
-        int64_t total_params = 0;
-        for (const auto& p : model->parameters()) {
-            if (p.requires_grad()) {
-                total_params += p.numel();
+        PokerGPT gpt;
+        size_t n_params = 0; 
+        for (auto& [name, param_opt] : gpt.parameters()) {
+            DEBUG_NONE("name: " << name);
+            DEBUG_NONE("n_params: " <<param_opt.value().size());
+            if (param_opt.has_value()) {
+                n_params += param_opt.value().size();
             }
         }
-        DEBUG_NONE("Model parameters = " << total_params);
-        DEBUG_WRITE(logfile, "n_parameters=" << total_params);
+        DEBUG_NONE("n params: " << n_params);
+        DEBUG_WRITE(logfile, "n params: " << n_params);
     }
     
     int traversals_per_thread = NUM_TRAVERSALS / NUM_THREADS;

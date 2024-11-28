@@ -3,7 +3,7 @@
 
 // cfr
 constexpr size_t NUM_PLAYERS = 2;
-constexpr size_t NUM_TRAVERSALS = 8000;
+constexpr size_t NUM_TRAVERSALS = 1000;
 constexpr size_t MAX_SIZE = 1e7; // Adjust this based on your expected maximum number of advantages
 constexpr size_t CFR_MAX_SIZE = 1e6;
 constexpr size_t NUM_ACTIONS = 6;
@@ -20,16 +20,14 @@ constexpr int BOARD_SIZE = 5;
 
 // model 
 constexpr int64_t MODEL_DIM = 128;
-constexpr int64_t NUM_HEADS = 1;      // Number of attention heads
-constexpr int64_t NUM_LAYERS = 1;     // Number of Transformer layers
 constexpr size_t N_HEADS = 4;
-constexpr size_t N_LAYERS = 3;
+constexpr size_t N_LAYERS = 1;
 constexpr int HEAD_DIM = MODEL_DIM / N_HEADS; 
 
 // training
-constexpr size_t TRAIN_BS = 100;
-constexpr size_t TRAIN_EPOCHS = 100;
-constexpr size_t TRAIN_ITERS = 100;
+constexpr size_t TRAIN_BS = 1024;
+constexpr size_t TRAIN_EPOCHS = 50;
+constexpr size_t TRAIN_ITERS = 5000;
 
 // eval
 constexpr size_t EVAL_BS = 100000;
