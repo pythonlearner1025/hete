@@ -4,7 +4,9 @@ import requests
 import sys
 import argparse
 import os
+import wandb
 
+from model import PokerGPT, ModelConfig, regret_match_mx, model_forward
 host = 'slumbot.com'
 
 NUM_STREETS = 4
@@ -262,9 +264,11 @@ def regret_match(logits):
         
     return strat
 
+
+
 def read_config(file_path):
     config = {}
-    target_vars = ['NUM_PLAYERS', 'MODEL_DIM', 'NUM_ACTIONS', 'MAX_ROUND_BETS']
+    target_vars = ['NUM_PLAYERS', 'MODEL_DIM', 'N_HEADS', 'N_LAYERS', 'NUM_ACTIONS', 'MAX_ROUND_BETS', 'NUM_TRAVERSALS', 'CFR_ITERS', 'TRAIN_BS', 'TRAIN_ITERS']
     
     with open(file_path, 'r') as file:
         for line in file:
@@ -274,15 +278,29 @@ def read_config(file_path):
                    line.startswith(f'constexpr int {var} = ') or \
                    line.startswith(f'constexpr int64_t {var} = '):
                     value = line.split('=')[1].strip().rstrip(';')
-                    config[var] = int(value)
+                    try:
+                        config[var] = int(value)
+                    except:
+                        pass
                     break
     
-    return (config.get('NUM_PLAYERS'),
-            config.get('MODEL_DIM'),
-            config.get('NUM_ACTIONS'),
-            config.get('MAX_ROUND_BETS'))
+    return {target_var:config.get(target_var) for target_var in target_vars}
 
 
+def get_hands(hand, board):
+    hand = [card2int(h) for h in hand] 
+    board += [None] * (5-len(board))
+    flops = [card2int(c) for c in board[:3]]
+    turn = card2int(board[3]) 
+    river = card2int(board[4])
+    hand += flops + [turn, river]
+    assert len(hand) == 7
+    return hand
+
+def get_bets(fracs):
+    ret = fracs + [0] * (MAX_ROUND_BETS*NUM_PLAYERS*4 - len(fracs))    
+    assert len(ret) == MAX_ROUND_BETS * 4 * NUM_PLAYERS
+    return ret
 
 def net_forward(player_models, player_idx, hand, board, status, fracs):
     assert len(status) == len(fracs)
@@ -399,20 +417,19 @@ def PlayHand(player_models, token):
         else:
             #if a['last_bettor'] != -1:, then you must cbr
             player_idx = 1 if client_pos == 0 else 0
-            logits = net_forward(
-                player_models,
-                player_idx,
-                hole_cards,
-                board,
-                status,
-                fracs
-            )
+            input_hands, input_bets = get_hands(hole_cards, board), get_bets(fracs)
+            logits: list = model_forward(player_models[player_idx], input_hands, input_bets)
             can_check = a['last_bettor'] == -1
             min_bet_amt = a['street_last_bet_to'] - client_last_bet
+
             print(f'min_bet_amt: {min_bet_amt}')
             mask_illegals(logits, pot, min_bet_amt)
             # fold is illegal
+            #print(logits)
+            #input()
             regrets = regret_match(logits)
+            #print(regrets)
+            #input()
             if r['action'] == '':
                 regrets[0] = -1
             actidx = np.argmax(regrets).item()
@@ -497,13 +514,29 @@ def Login(username, password):
         sys.exit(-1)
     return token
 
-def auto(log_path, start_iter, num_hands=10):
+
+def auto(log_path, start_iter, num_hands=10, use_wandb=True, config={}, resume="", mlx=True):
+    model_config = ModelConfig()
+    model_config.update_from_dict(config) 
     import time
     eval_cfr_iter = start_iter
+    if use_wandb:
+        print("initializing wandb")
+        kwargs = {}
+        if resume:
+            kwargs["id"] = resume
+            kwargs["resume"] = "must"
+        wandb.init(
+            project = "poker ai",
+            config={**config},
+            name=run_name,
+            **kwargs
+        )
+
     while 1:
         both_player_exists = True
         for i in range(NUM_PLAYERS):
-            path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.pt')
+            path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.safetensors')
             if not os.path.exists(path):
                 both_player_exists = False
         
@@ -512,8 +545,10 @@ def auto(log_path, start_iter, num_hands=10):
 
             for i in range(NUM_PLAYERS):
                 assert eval_cfr_iter == -1 or eval_cfr_iter < len(os.listdir(MODELS_PATH))
-                path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.pt')
-                player_models[i] = path   
+                path = os.path.join(MODELS_PATH, str(eval_cfr_iter), str(i), 'model.safetensors')
+                gpt = PokerGPT(config=model_config)
+                gpt.load_weights(path)
+                player_models[i] = gpt   
 
             if username and password:
                 token = Login(username, password)
@@ -538,6 +573,10 @@ def auto(log_path, start_iter, num_hands=10):
                 'session_baseline_total_avg_mbb': sum(baseline_totals)/len(baseline_totals)/bb*1000 if baseline_totals else 0
             }
 
+
+            if use_wandb:
+                wandb.log(eval_results)
+
             with open(f'{log_path}/eval.log', 'a') as f:
                 for key, value in eval_results.items():
                     log_line = f'{key} = {value}\n'
@@ -550,6 +589,8 @@ def auto(log_path, start_iter, num_hands=10):
         else:
             time.sleep(10)
             print('sleeping 10 seconds...')
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':
@@ -559,12 +600,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Slumbot API example')
     parser.add_argument('--username', type=str, default="")
     parser.add_argument('--password', type=str, default="")
-    parser.add_argument('--log_path', type=str)
+    parser.add_argument('--log_path', type=str, default=None)
     parser.add_argument('--num_hands', type=int, default=1000)
     parser.add_argument('--plot_all',type=int, default=1)
     parser.add_argument('--start_iter', type=int, default=1)
     parser.add_argument('--plot_intervals',type=int, default=1)
+    parser.add_argument('--auto', type=int, default=1)
     parser.add_argument('--write', type=int, default=1)
+    parser.add_argument('--wandb', type=int, default=1)
+    parser.add_argument('--name', type=str, default="")
+    parser.add_argument('--mlx', type=int, default=1)
+    parser.add_argument('--resume', type=str, default="")
     args = parser.parse_args()
     username = args.username
     password = args.password
@@ -573,14 +619,24 @@ if __name__ == '__main__':
     plot_all = args.plot_all
     start_iter = args.start_iter
     plot_intervals = args.plot_intervals
+    automatic = args.auto
     write = args.write
+    use_wandb = args.wandb
+    run_name = args.name
+    mlx = args.mlx
+    resume = args.resume
+
+    if not log_path:
+        log_path = os.path.join('./out',sorted(os.listdir('out'))[-1])
 
     FILE_PATH = f'{log_path}/const.log'
     MODELS_PATH = log_path
-    NUM_PLAYERS, MODEL_DIM, NUM_ACTIONS, MAX_ROUND_BETS = read_config(FILE_PATH)
+    config = read_config(FILE_PATH)
+    NUM_PLAYERS, MODEL_DIM, NUM_HEADS, N_LAYERS, NUM_ACTIONS, MAX_ROUND_BETS, _, _, _, _ = tuple(config.values())
 
-    auto(log_path, start_iter, num_hands=num_hands)
-    exit(-1)
+    if automatic:
+        auto(log_path, start_iter, num_hands=num_hands, use_wandb=use_wandb, config=config, mlx=mlx, resume=resume)
+        exit(-1)
 
     only_dirs = [dir for dir in os.listdir(MODELS_PATH) if os.path.splitext(dir)[1] == '']
     total_iters = len(only_dirs) if plot_all else 1

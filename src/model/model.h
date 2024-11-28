@@ -1,197 +1,855 @@
-// model.h
+// Copyright © 2023 Apple Inc.
 
-#ifndef MODEL_H
-#define MODEL_H
-
-#include <torch/torch.h>
-#include <vector>
-#include <memory>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include "../constants.h"
-#include "../debug.h"
-
-#include <torch/torch.h>
-#include <torch/script.h>
-#include <vector>
-#include <iostream>
-#include <stdexcept>
 #include <chrono>
-#include <cassert>
-#include "model.h"
-#include <unordered_map>
+#include <cmath>
+#include <iostream>
+#include "../debug.h"
+#include <mlx/mlx.h>
 
-// ========================
-// CardEmbedding Module
-// ========================
+/**
+ * An example of linear regression with MLX.
+ */
 
-struct CardEmbeddingImpl :  torch::nn::Module {
-    torch::nn::Embedding rank{nullptr}, suit{nullptr}, card{nullptr};
+using namespace mlx::core;
 
-    // Constructor
-    CardEmbeddingImpl() {
-        // Initialize Embedding layers
-        rank = register_module("rank", torch::nn::Embedding(13,MODEL_DIM));
-        suit = register_module("suit", torch::nn::Embedding(4,MODEL_DIM));
-        card = register_module("card", torch::nn::Embedding(52,MODEL_DIM));
+
+// TODO maybe change to std::shared_ptr for safety 
+class MyModule {
+protected:
+    struct RegisteredArray {
+        array* arr;
+        std::string name;
+    };
+
+    struct RegisteredModule {
+        MyModule* ptr;  // changed to shared_ptr
+        std::string name;
+    };
+
+    MyModule* parent = nullptr;
+    std::vector<RegisteredArray> arrays;
+    std::vector<RegisteredModule> modules;
+    std::string name;
+
+    void register_array(array& arr, const std::string& name) {
+            arrays.push_back({&arr, name});  // take ownership
     }
 
-    // Forward pass
-    torch::Tensor forward(torch::Tensor input) {
-        auto B = input.size(0);
-        auto num_cards = input.size(1);
+    void register_module(MyModule& module, const std::string& name) {
+       if (name.empty()) {
+           throw std::runtime_error("Cannot register module with empty name");
+       }
+       module.name = name;
+       module.parent = this;
+       modules.push_back({&module, name});  // wrap in shared_ptr
+   }
+
+public:
+   MyModule(const std::string& name_) : name(name_) {}
+
+   std::string get_full_path() const {
+       if (!parent) {
+        return name;
+       }
+       auto path = parent->get_full_path() + "." + name;
+       return path;
+   }
+
+    std::map<std::string, std::optional<array>> parameters() {
+        std::map<std::string, std::optional<array>> params;
         
-        // Flatten the input
-        auto x = input.reshape({-1});
+        visit([&params](const std::string& path, array& arr) {
+            params[path] = std::optional<array>(arr);
+        });
+
+        return params;
+    }
+
+    void visit(const std::function<void(const std::string&, array&)>& visitor, 
+            const std::string& parent_path = "") {
+        std::string base_path = parent_path.empty() ? name 
+                                              : parent_path + "." + name;
+
+        // visit arrays
+        for (auto& reg : arrays) {
+            visitor(base_path + "." + reg.name, *reg.arr);
+        }
+
+        // visit nested modules 
+        for (auto& reg : modules) {
+            reg.ptr->visit(visitor, base_path);
+        }
+    }
+
+   void update(const std::map<std::string, std::optional<array>>& params) {
+       std::string base_path = get_full_path();
+       
+       // update arrays
+       for (auto& reg : arrays) {
+           std::string full_path = base_path + "." + reg.name;
+           if (params.count(full_path)) {
+               *reg.arr = params.at(full_path).value();
+           }
+       }
+       // update nested modules
+       for (auto& reg : modules) {
+           reg.ptr->update(params);
+       }
+   }
+};
+
+class AdamOptimizer {
+private:
+    float lr;
+    float beta1;
+    float beta2; 
+    float eps;
+    int step_count = 0;
+    
+    struct State {
+        std::optional<array> m; // first moment 
+        std::optional<array> v; // second moment
         
-        // Create a mask for valid cards (input >= 0)
-                                                      // set copy to true
-        auto valid = (x >= 0).to(torch::kFloat, false, true); // -1 indicates 'no card'
+        // now we can have a default constructor
+        State() = default;
         
-        // Clamp negative indices to 0
-        x = torch::clamp(x, /*min=*/0);
+        // and our normal constructor 
+        State(const array& m_, const array& v_) : m(m_), v(v_) {}
+    };
+    // optimizer state storage
+    std::map<std::string, State> state;
+
+public:
+    AdamOptimizer(
+        float learning_rate = 0.001f,
+        float beta1 = 0.9f,
+        float beta2 = 0.999f,
+        float eps = 1e-8f
+    ) : lr(learning_rate), beta1(beta1), beta2(beta2), eps(eps) {}
+
+    // initialize optimizer state for parameters
+    void init(const std::map<std::string, std::optional<array>>& params) {
+        for (const auto& [name, param_opt] : params) {
+            if (!param_opt.has_value()) continue;
+            
+            const array& param = param_opt.value();
+            state[name] = State{
+                zeros_like(param), // m
+                zeros_like(param)  // v
+            };
+        }
+    }
+
+   // update parameters using gradients
+    void update(MyModule& model, const std::map<std::string, std::optional<array>>& grads, float max_norm = -1.0f) {
+        step_count++;
         
-        // Ensure x is of integer type
-        if (x.dtype() != torch::kInt) {
-            x = x.to(torch::kInt);
+        // compute bias correction terms
+        float bc1 = 1.0f - std::pow(beta1, step_count);
+        float bc2 = 1.0f - std::pow(beta2, step_count);
+        float lr_t = lr * std::sqrt(bc2) / bc1;
+
+        // get current parameters
+        auto params = model.parameters();
+
+        // updated parameters to send back to model
+        std::map<std::string, std::optional<array>> updated_params;
+
+        for (const auto& [name, param_opt] : params) {
+            if (!param_opt.has_value() || grads.count(name) == 0) {
+                updated_params[name] = param_opt;
+                continue;
+            }
+
+            const array& param = param_opt.value();
+            const array& grad = grads.at(name).value();
+            auto& s = state[name];
+
+            // clip gradients if needed
+            array clipped_grad = grad;
+            if (max_norm > 0) {
+                array grad_norm = sqrt(sum(square(grad)));
+                array scale = minimum(array(max_norm), grad_norm) / grad_norm;
+                clipped_grad = multiply(grad, scale);
+            }
+            
+            // update momentum
+            s.m = add(
+                multiply(array(beta1), s.m.value()),
+                multiply(array(1.0f - beta1), clipped_grad)
+            );
+            
+            // update velocity 
+            s.v = add(
+                multiply(array(beta2), s.v.value()),
+                multiply(array(1.0f - beta2), square(clipped_grad))
+            );
+            
+            // compute update
+            array update = multiply(
+                array(lr_t),
+                divide(
+                    s.m.value(),
+                    add(sqrt(s.v.value()), array(eps))
+                )
+            );
+
+            // store updated parameter
+            updated_params[name] = subtract(param, update);
+        }
+
+        // update model parameters
+        model.update(updated_params);
+    }
+
+    // basic scheduler that reduces learning rate by factor after n steps
+    void schedule_lr(float factor, int after_steps) {
+        if (step_count > after_steps) {
+            lr *= factor;
+        }
+    }
+};
+
+class LayerNorm : public MyModule {
+  public:
+    double eps = 1e-5; 
+    array gamma = ones({MODEL_DIM});
+    array beta = zeros({MODEL_DIM});
+
+    LayerNorm() : MyModule("LayerNorm") {
+        register_array(gamma, "gamma");
+        register_array(beta, "beta");
+    }
+
+    array forward(array x) {
+      array u = mean(x, -1, true);
+      array v = var(x, -1, true);
+      return gamma * (x - u) / mlx::core::sqrt(v + eps) + beta;
+    }
+};
+
+class Decoder : public MyModule  {
+   public:
+     int attn_dim = MODEL_DIM / N_HEADS;
+     array attn_wq = random::normal({MODEL_DIM, HEAD_DIM});
+     array attn_wk = random::normal({MODEL_DIM, HEAD_DIM});
+     array attn_wv = random::normal({MODEL_DIM, HEAD_DIM});
+     array attn_out = random::normal({MODEL_DIM, HEAD_DIM});
+     array ffn_1 = random::normal({HEAD_DIM, 4*MODEL_DIM});
+     array ffn_2 = random::normal({4*MODEL_DIM, HEAD_DIM});
+
+     Decoder() : MyModule("Decoder") {
+       register_array(attn_wq, "attn_wq");
+       register_array(attn_wk, "attn_wk"); 
+       register_array(attn_wv, "attn_wv");
+       register_array(attn_out, "attn_out");
+       register_array(ffn_1, "ffn_1");
+       register_array(ffn_2, "ffn_2");
+       ////DEBUG_NONE("decoder reg complete");
+     }
+
+   array forward(array x) {
+      array q = matmul(x, attn_wq);
+      //DEBUG_NONE(get_full_path() << " q shape: " << q.shape());
+
+      array k = matmul(x, attn_wk);
+      //DEBUG_NONE(get_full_path() << " k shape: " << k.shape());
+      
+      array v = matmul(x, attn_wv);
+      //DEBUG_NONE(get_full_path() << " v shape: " << v.shape());
+      
+      //array attn = reshape(matmul(q, reshape(k, {k.shape()[1], k.shape()[2], -1})) * sqrt(HEAD_DIM), {k.shape()[0], x.shape()[1], x.shape()[1]});
+      array attn = matmul(q, transpose(k, {0,2,1})) / sqrt(HEAD_DIM);
+
+      //DEBUG_NONE(get_full_path() << " attn shape: " << attn.shape());
+
+      attn = tril(attn);
+      //DEBUG_NONE(get_full_path() << " tril shape: " << attn.shape());
+
+      x = softmax(attn, -1);
+      //DEBUG_NONE(get_full_path() << " softmax shape: " << x.shape());
+
+      x = matmul(x, v);
+      //DEBUG_NONE(get_full_path() << " attn*v shape: " << x.shape());
+
+      x = matmul(x, ffn_1);
+      //DEBUG_NONE(get_full_path() << " ffn1 shape: " << x.shape());
+
+      x = maximum(x, zeros_like(x));
+      //DEBUG_NONE(get_full_path() << " relu shape: " << x.shape());
+
+      //DEBUG_NONE(get_full_path() << " x shape: " << x.shape());
+      x = matmul(x, ffn_2);
+      //DEBUG_NONE(get_full_path() << " ffn2 shape: " << x.shape());
+
+      return x;
+   }
+};
+
+
+class MHA : public MyModule {
+    public: 
+    std::array<Decoder, N_HEADS> heads;
+    LayerNorm norm;
+    MHA() : MyModule("MHA"), heads{} {
+        for(size_t i = 0; i < N_HEADS; i++) {
+            register_module(heads[i], "head_" + std::to_string(i));
+        }
+        register_module(norm, "layernorm");
+    }
+
+    array forward(array x) {
+        std::vector<array> outs{};
+        for (size_t i=0; i<N_HEADS; ++i) {
+        array head_out = heads[i].forward(x);
+        outs.push_back(head_out);
+        }
+
+        array out = concatenate(outs, -1);
+        out = norm.forward(out);
+        return out;
+    }
+};
+
+array test_card_embed(array x, array card_emb_w, array rank_emb_w, array suit_emb_w) {
+  auto B = x.shape()[0];  // 1 
+  auto num_cards = x.shape()[1];  // 2
+  auto MODEL_DIM = card_emb_w.shape()[1];
+  x = reshape(x, {B * num_cards});
+  
+  auto valid = astype((x >= 0), float32);
+  x = maximum(x, zeros_like(x));
+  x = astype(x, int32);
+
+  auto rank_indices = floor_divide(x, array(4));
+  auto suit_indices = remainder(x, array(4));
+
+  // gather full vectors along first axis
+  auto card_embs = squeeze(gather(card_emb_w, {x}, {0}, {1,MODEL_DIM})); // should give [2, MODEL_DIM]
+  
+  auto rank_embs = squeeze(gather(rank_emb_w, {rank_indices}, {0}, {1,MODEL_DIM}));
+  
+  auto suit_embs = squeeze(gather(suit_emb_w, {suit_indices}, {0}, {1,MODEL_DIM}));
+
+  auto embs = add(add(card_embs, rank_embs), suit_embs);
+
+  embs = multiply(embs, expand_dims(valid, 1));
+  embs = reshape(embs, {B, num_cards, MODEL_DIM});
+  return embs; 
+}
+
+class PokerGPT : public MyModule {
+ private:
+    std::mutex graph_mutex;
+ public: 
+   array card_emb_w = random::normal({52, MODEL_DIM});
+   array rank_emb_w = random::normal({13, MODEL_DIM}); 
+   array suit_emb_w = random::normal({4, MODEL_DIM});
+   array bet_proj_w = random::normal({1, MODEL_DIM});
+   array action_head = random::normal({MODEL_DIM, NUM_ACTIONS});
+   std::array<MHA, N_LAYERS> layers; 
+
+   PokerGPT() : MyModule("PokerGPT") {
+     //////DEBUG_NONE("initializing PokerGPT");
+     register_array(card_emb_w, "card_emb_w");
+     register_array(rank_emb_w, "rank_emb_w");
+     register_array(suit_emb_w, "suit_emb_w");
+     register_array(bet_proj_w, "bet_proj_w");
+     register_array(action_head, "action_head");
+     for(size_t i = 0; i < N_LAYERS; i++) {
+        std::string layer_name = "layer_" + std::to_string(i);
+        register_module(layers[i], layer_name);  // register each head directly
+     }
+    ////DEBUG_NONE("pokergpt reg complete");
+   }
+
+   array forward(array cards, array bets) {
+      auto BS = cards.shape()[0];
+      auto card_emb = test_card_embed(cards, card_emb_w, rank_emb_w, suit_emb_w);
+      bets = matmul(reshape(bets, {BS,-1, 1}), bet_proj_w);
+      array pos_ids = make_pos_ids();
+
+      array round_pe = get_round_encoding();
+      array action_pe = get_action_encoding();
+      //DEBUG_NONE("got action pe" << action_pe.shape());
+
+      array preflop = reshape(repeat(take(round_pe, 0, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
+      array flop = reshape(repeat(take(round_pe, 1, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM}); 
+      array turn = reshape(repeat(take(round_pe, 2, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
+      array river = reshape(repeat(take(round_pe, 3, 0), MAX_ROUND_BETS*NUM_PLAYERS), {-1, MODEL_DIM});
+      array concat_round_pos = concatenate({preflop, flop, turn, river}, 0); 
+      //DEBUG_NONE("got concat_round_pos" << concat_round_pos.shape());
+
+      bets = add(add(bets, concat_round_pos), repeat(action_pe, 4, 0));
+      //DEBUG_NONE("bets" << bets.shape());
+
+      array x = concatenate({card_emb, bets}, 1);
+      //DEBUG_NONE("x" << x.shape());
+
+      for (size_t i=0; i<N_LAYERS; ++i) {
+        x = layers[i].forward(x);
+        ////DEBUG_NONE("layer " << i << x.shape());
+      }
+
+      array last_tokens = slice(
+        x,
+        {0, x.shape(1)-1, 0},
+        {x.shape(0), x.shape(1), x.shape(2)}
+      );
+      //DEBUG_NONE("last_tokens " << last_tokens.shape());
+
+      array out = matmul(last_tokens, action_head);
+      //DEBUG_NONE("out " << out.shape());
+      return out;
+   }
+
+   array make_pos_ids() {
+        std::vector<int> pos_vec(NUM_PLAYERS * MAX_ROUND_BETS);
+        std::iota(pos_vec.begin(), pos_vec.end(), 0);
+        array arr = array(pos_vec.data(), {static_cast<int>(pos_vec.size())});
+        return arr;
+   }
+
+    array get_round_encoding() {
+        // Generate base positional encoding for 4 rounds
+        return get_sinusoidal_pos_encoding(4, MODEL_DIM);
+    }
+
+    array get_action_encoding() {
+        // Generate base positional encoding for max actions
+        return get_sinusoidal_pos_encoding(NUM_PLAYERS * MAX_ROUND_BETS, MODEL_DIM); 
+    }
+
+    array get_sinusoidal_pos_encoding(int length, int dim) {
+      // Generate position and dimension indices
+      array pos = reshape(arange(length), {length, 1});  // [length, 1]
+      array dim_indices = arange(0, dim/2);              // [dim/2]
+      
+      // Calculate frequencies: 10000^(-2i/d_model)
+      array freqs = exp(multiply(dim_indices, array(-log(10000.0) / dim))); // [dim/2]
+      
+      // Calculate arguments for sin/cos: pos * freqs
+      array args = matmul(pos, reshape(freqs, {1, dim/2}));  // [length, dim/2]
+      
+      // Calculate sin and cos values
+      array sin_vals = sin(args);  // [length, dim/2]
+      array cos_vals = cos(args);  // [length, dim/2]
+      
+      // Initialize output array
+      array pe = zeros({length, dim}); 
+      
+      // Create indices for scattering
+      array row_indices = repeat(arange(length), dim/2);
+      
+      // Create column indices
+      array sin_col_indices = reshape(multiply(arange(dim/2), array(2)), {-1});  // [0,2,4...]
+      array sin_cols = repeat(sin_col_indices, length);
+      
+      array sin_updates = reshape(sin_vals, {length * dim/2, 1, 1});
+      array cos_updates = reshape(cos_vals, {length * dim/2, 1, 1});
+      
+      // Scatter sin values into even columns
+      pe = scatter(pe, 
+                  {row_indices, sin_cols},
+                  sin_updates,
+                  {0, 1});
+                  
+      // Scatter cos values into odd columns
+      pe = scatter(pe,
+                  {row_indices, add(sin_cols, array(1))},
+                  cos_updates, 
+                  {0, 1});
+      return pe;
+    }
+
+    void to_bfloat16() {
+        card_emb_w = astype(card_emb_w, bfloat16);
+        rank_emb_w = astype(rank_emb_w, bfloat16);
+        suit_emb_w = astype(suit_emb_w, bfloat16);
+        bet_proj_w = astype(bet_proj_w, bfloat16);
+        action_head = astype(action_head, bfloat16);
+
+        for(auto& layer : layers) {
+            for(auto& head : layer.heads) {
+                head.attn_wq = astype(head.attn_wq, bfloat16);
+                head.attn_wk = astype(head.attn_wk, bfloat16);
+                head.attn_wv = astype(head.attn_wv, bfloat16);
+                head.attn_out = astype(head.attn_out, bfloat16);
+                head.ffn_1 = astype(head.ffn_1, bfloat16);
+                head.ffn_2 = astype(head.ffn_2, bfloat16);
+            }
+            layer.norm.gamma = astype(layer.norm.gamma, bfloat16);
+            layer.norm.beta = astype(layer.norm.beta, bfloat16);
+        }
+    }
+
+};
+
+enum class Reduction {
+    NONE,
+    MEAN,
+    SUM
+};
+
+array reduce(const array& x, Reduction reduction) {
+    switch (reduction) {
+        case Reduction::NONE:
+            return x;
+        case Reduction::MEAN:
+            return mean(x);
+        case Reduction::SUM:
+            return sum(x);
+        default:
+            throw std::runtime_error("Unknown reduction");
+    }
+}
+
+array smooth_l1_loss(
+    const array& predictions,
+    const array& targets,
+    float beta = 1.0f,
+    Reduction reduction = Reduction::MEAN
+) {
+    if (predictions.shape() != targets.shape()) {
+        std::ostringstream msg;
+        msg << "Predictions shape " << predictions.shape() 
+            << " does not match targets shape " << targets.shape();
+        throw std::invalid_argument(msg.str());
+    }
+
+    array diff = subtract(predictions, targets);
+    array squared_loss = multiply(array(0.5f / beta), square(diff));
+    array abs_loss = subtract(abs(diff), array(0.5f * beta));
+    
+    array loss = where(
+        less(abs(diff), array(beta)),
+        squared_loss,
+        abs_loss
+    );
+
+    return reduce(loss, reduction);
+}
+
+array mse_loss(
+    const array& predictions,
+    const array& targets,
+    Reduction reduction = Reduction::MEAN
+) {
+    if (predictions.shape() != targets.shape()) {
+        std::ostringstream msg;
+        msg << "Predictions shape " << predictions.shape() 
+            << " does not match targets shape " << targets.shape();
+        throw std::invalid_argument(msg.str());
+    }
+
+    array loss = square(subtract(predictions, targets));
+    return reduce(loss, reduction);
+}
+
+void test_mlx() {
+    int n_players = 2;
+    int max_round_bets = 6;
+    mlx::core::set_default_device(Device::gpu);
+
+    array card_emb_w = random::normal({52, MODEL_DIM});
+    array rank_emb_w = random::normal({13, MODEL_DIM});
+    array suit_emb_w = random::normal({4, MODEL_DIM});
+    
+    // define test inputs
+    array hand = array({10, 10}, {1,2});
+    std::vector<int> pos_vec(NUM_PLAYERS * MAX_ROUND_BETS);
+    std::iota(pos_vec.begin(), pos_vec.end(), 0);
+    array round_ids = array({0,1,2,3});
+    array bets = zeros({1, NUM_PLAYERS*MAX_ROUND_BETS*4});
+
+    PokerGPT gpt;
+    AdamOptimizer opt(0.001f);
+    opt.init(gpt.parameters());
+
+    size_t n_params = 0; 
+    for (auto& [name, param_opt] : gpt.parameters()) {
+        DEBUG_NONE("name: " << name);
+        DEBUG_NONE("n_params: " <<param_opt.value().size());
+        if (param_opt.has_value()) {
+            n_params += param_opt.value().size();
+        }
+    }
+    DEBUG_NONE("n params: " << n_params);
+
+    DEBUG_NONE("init opt");
+    array targets = zeros(gpt.forward(hand, bets).shape());
+      // define loss function that takes vector of arrays instead of map
+    auto loss_fn = [&](const std::vector<array>& param_arrays) {
+        // construct parameter map from vector
+        auto param_map = gpt.parameters();
+        int i = 0;
+        for (auto& [name, param_opt] : param_map) {
+            if (param_opt.has_value()) {
+                param_opt = param_arrays[i++];
+            }
         }
         
-        // Compute rank and suit indices using integer division and modulo
-        auto rank_indices = torch::floor_divide(x, 4).to(torch::kInt);      // [B*num_cards]
-        auto suit_indices = torch::remainder(x, 4).to(torch::kInt);        // [B*num_cards]
+        gpt.update(param_map);
         
-        // Ensure that rank_indices and suit_indices are within valid ranges
-        rank_indices = torch::clamp(rank_indices, 0, 12); // Ranks: 0-12
-        suit_indices = torch::clamp(suit_indices, 0, 3);  // Suits: 0-3
+        array preds = gpt.forward(hand, bets);
+        // compute loss
+        return smooth_l1_loss(preds, targets);
+    };
 
-        // Compute embeddings
-        auto card_embs = card->forward(x);             // [B*num_cards,MODEL_DIM]
-        auto rank_embs = rank->forward(rank_indices);  // [B*num_cards,MODEL_DIM]
-        auto suit_embs = suit->forward(suit_indices);  // [B*num_cards,MODEL_DIM]
+    DEBUG_NONE("got targets");
+    // training loop
+    for (int step = 0; step < 1000; step++) {
+        std::vector<array> param_arrays;
+        std::vector<int> argnums;
+        int param_idx = 0;
+        for (const auto& [name, param_opt] : gpt.parameters()) {
+            if (param_opt.has_value()) {
+                param_arrays.push_back(param_opt.value());
+                argnums.push_back(param_idx);
+                param_idx++;
+            }
+        }
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto grad_fn = mlx::core::value_and_grad(loss_fn, argnums);
+        auto [losses, grads] = grad_fn(param_arrays);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end-start);
+
+        std::map<std::string, std::optional<array>> grad_map;
+        int i = 0;
+        for (const auto& [name, param_opt] : gpt.parameters()) {
+            if (param_opt.has_value()) {
+                grad_map[name] = grads[i++];
+            }
+        }
+
+        opt.update(gpt, grad_map);
+
+        eval(losses);
         
-        // Sum the embeddings
-        auto embs = card_embs + rank_embs + suit_embs; // [B*num_cards,MODEL_DIM]
-        
-        // Zero out embeddings for 'no card'
-        embs = embs * valid.unsqueeze(1); // [B*num_cards,MODEL_DIM]
-        
-        // Reshape and sum across cards
-        embs = embs.reshape({B, num_cards, -1}).sum(1); // [B,MODEL_DIM]
-        //DEBUG_NONE("reshaped");
-        return embs;
+        DEBUG_NONE("loss val: " << losses.item<float>());
+
+        if (step % 10 == 0) {
+            std::cout << "Step " << step << " Loss: " << losses << std::endl;
+        }
     }
+}
+
+// assumes csv files are in a folder called 'mnist_data' in the current directory
+std::string train_file = "/Users/minjunes/Downloads/mnist/mnist_train.csv"; 
+std::string test_file = "/Users/minjunes/Downloads/mnist/mnist_test.csv";
+
+class MLPNet : public MyModule {
+  public:
+   array l1 = random::normal({784, 256}) * sqrt(2.0f/784); // he initialization
+   array l2 = random::normal({256, 128}) * sqrt(2.0f/256);
+   array l3 = random::normal({128, 64}) * sqrt(2.0f/128);
+   array head = random::normal({64, 10}) * sqrt(2.0f/64);
+   float dropout_rate = 0.15f;
+
+   MLPNet() : MyModule("MLPNet") {
+     register_array(l1, "l1");  
+     register_array(l2, "l2");
+     register_array(l3, "l3");
+     register_array(head, "head");
+   }
+   
+   array forward(array x, bool training = true) {
+    x = reshape(x, {-1, 784});
+     
+    x = matmul(x, l1);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, l2);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, l3);
+    x = maximum(multiply(x, array(0.1f)), x);
+    if(training) {
+        array mask = random::uniform(x.shape()) > dropout_rate;
+        x = multiply(x, mask) / (1.0f - dropout_rate);
+    }
+     
+    x = matmul(x, head);
+    return softmax(x);
+}
 };
-TORCH_MODULE(CardEmbedding); // Creates CardEmbedding as a ModuleHolder<CardEmbeddingImpl>
 
-// ========================
-// DeepCFRModel Module
-// ========================
-
-struct DeepCFRModelImpl :  torch::nn::Module {
-    torch::nn::ModuleList card_embeddings{nullptr};
-    torch::nn::Linear card1{nullptr}, card2{nullptr}, card3{nullptr};
-    torch::nn::Linear bet1{nullptr}, bet2{nullptr};
-    torch::nn::Linear comb1{nullptr}, comb2{nullptr}, comb3{nullptr};
-    torch::nn::LayerNorm norm{nullptr};
-    torch::nn::Linear action_head{nullptr};
-    CardEmbedding hand_embed{nullptr};
-    CardEmbedding flop_embed{nullptr};
-    CardEmbedding turn_embed{nullptr};
-    CardEmbedding river_embed{nullptr};
-
-    // Constructor
-    DeepCFRModelImpl(){
-        
-        int64_t n_card_types = 4;
-
-        hand_embed = register_module("hand_embed", CardEmbedding());
-        flop_embed = register_module("flop_embed", CardEmbedding());
-        turn_embed = register_module("turn_embed", CardEmbedding());
-        river_embed = register_module("river_embed", CardEmbedding());
-
-        // Initialize card linear layers
-        card1 = register_module("card1", torch::nn::Linear(MODEL_DIM* n_card_types,MODEL_DIM));
-        card2 = register_module("card2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        card3 = register_module("card3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-
-        // Initialize bet linear layers
-        // Calculate input size based on the formula: (MAX_ROUND_BETS * NUM_PLAYERS * nrounds - nrounds) * 2
-        int64_t bet_input_size = (MAX_ROUND_BETS * NUM_PLAYERS * 4) * 2;
-        //std::cout << "expected bet_input_size: " + std::to_string(bet_input_size) << std::endl; 
-        bet1 = register_module("bet1", torch::nn::Linear(bet_input_size,MODEL_DIM));
-        bet2 = register_module("bet2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-
-        // Initialize combined trunk layers
-        comb1 = register_module("comb1", torch::nn::Linear(2 *MODEL_DIM,MODEL_DIM));
-        comb2 = register_module("comb2", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        comb3 = register_module("comb3", torch::nn::Linear(MODEL_DIM,MODEL_DIM));
-        
-        // Correct LayerNorm initialization with a vector
-        norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({MODEL_DIM})));
-        
-        action_head = register_module("action_head", torch::nn::Linear(MODEL_DIM, NUM_ACTIONS));
+array one_hot(const array& indices, int num_classes) {
+    // get batch size from indices shape
+    auto bs = indices.shape()[0];
+    
+    // create output array of zeros [bs, num_classes]
+    array out = zeros({bs, num_classes});
+    
+    // create row indices for scatter
+    array row_indices = arange(bs);
+    
+    // scatter 1s into the right positions
+    return scatter(out, 
+                  {row_indices, astype(indices, int32)},
+                  ones({bs, 1, 1}),
+                  {0, 1});
+}
+ 
+std::pair<array,array> load_batch(const std::string& csv_file, int batch_size) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    
+    std::ifstream file(csv_file);
+    if (!file.is_open()) {
+        throw std::runtime_error("failed to open file: " + csv_file);
     }
 
-    // Forward pass
-    torch::Tensor forward(
-        torch::Tensor hand, 
-        torch::Tensor flop, 
-        torch::Tensor turn, 
-        torch::Tensor river, 
-        torch::Tensor bet_fracs, 
-        torch::Tensor bet_status
-    ) {
-        /*
-        Parameters:
-            cards: std::vector<torch::Tensor> of size n_card_types
-                   Each tensor shape: [N, num_cards_in_group] (e.g., [N, 2], [N, 3], etc.)
-            bet_fracs: torch::Tensor of shape [N, bet_input_size / 2]
-            bet_status: torch::Tensor of shape [N, bet_input_size / 2]
-        */
-
-        // 1. Card Branch
-        torch::Tensor card_embs_cat;
-        torch::Tensor hand_emb = hand_embed->forward(hand);
-        torch::Tensor flop_emb = flop_embed->forward(flop);
-        torch::Tensor turn_emb = turn_embed->forward(turn);
-        torch::Tensor river_emb = river_embed->forward(river);
-
-        // Concatenate embeddings from all card groups
-        card_embs_cat = torch::cat({hand_emb, flop_emb, turn_emb, river_emb}, /*dim=*/1); // [N,MODEL_MODEL_DIM * n_card_types]
-
-        // Pass through card linear layers with ReLU activations
-        auto x = torch::relu(card1->forward(card_embs_cat)); // [N,MODEL_DIM]
-        x = torch::relu(card2->forward(x));                  // [N,MODEL_DIM]
-        x = torch::relu(card3->forward(x));                  // [N,MODEL_DIM]
-
-        // 2. Bet Branch
-        auto bet_size = bet_fracs.clamp(/*min=*/0, /*max=*/1e6); // Clamp between 0 and 1e6
-        auto bet_occurred = bet_status.to(torch::kFloat);        // [N, bet_input_size / 2]
-        auto bet_feats = torch::cat({bet_size, bet_occurred}, /*dim=*/1); // [N, bet_input_size]
-        
-        // Pass through bet linear layers with ReLU and residual connection
-        // Inside the forward function, just before the Bet Branch
-        /*
-        DEBUG_NONE("bet_feats shape: " << bet_feats.sizes());
-        DEBUG_NONE("bet1 weight shape: " << bet1->weight.sizes());
-        DEBUG_NONE("bet1 bias shape: " << bet1->bias.sizes());
-        */
-        auto y = torch::relu(bet1->forward(bet_feats));           // [N,MODEL_DIM]
-        y = torch::relu(bet2->forward(y) + y);                    // [N,MODEL_DIM]
-
-        // 3. Combined Trunk
-        auto z = torch::cat({x, y}, /*dim=*/1);                    // [N, 2 *MODEL_DIM]
-        z = torch::relu(comb1->forward(z));                       // [N,MODEL_DIM]
-        z = torch::relu(comb2->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        z = torch::relu(comb3->forward(z) + z);                    // [N,MODEL_DIM] (Residual)
-        z = norm->forward(z);                                      // LayerNorm
-        
-        // Action Head
-        auto output = action_head->forward(z);                      // [N, NUM_ACTIONS]
-        //std::cout << "forward complete" << std::endl;
-        return output;
+    // count total lines first time (could cache this)
+    int total_lines = 0;
+    std::string line;
+    while (std::getline(file, line)) total_lines++;
+    
+    // subtract 1 if there's a header
+    try {
+        std::stof(line.substr(0, line.find(',')));
+    } catch (...) {
+        total_lines--;
     }
-};
-TORCH_MODULE(DeepCFRModel); // Creates DeepCFRModel as a ModuleHolder<DeepCFRModelImpl>
-#endif // MODEL_H
+
+    // randomly seek to a position
+    std::uniform_int_distribution<> dis(0, total_lines - batch_size);
+    int start_pos = dis(gen);
+    
+    file.clear();
+    file.seekg(0);
+    
+    // skip header if present
+    std::getline(file, line);
+    
+    // skip to random position
+    for (int i = 0; i < start_pos; i++) {
+        std::getline(file, line);
+    }
+
+    // rest of the function same as before
+    std::vector<float> images;
+    std::vector<float> labels;
+    
+    int curr_bs = 0;
+    while(std::getline(file, line) && curr_bs < batch_size) {
+        std::stringstream lineStream(line);
+        std::string cell;
+        
+        // first entry in each row is the label
+        if (!std::getline(lineStream, cell, ',')) {
+        throw std::runtime_error("missing label value at row " + std::to_string(curr_bs+1)); 
+        }
+        try {
+        labels.push_back(std::stof(cell));
+        } catch (const std::exception& e) {
+        throw std::runtime_error("invalid label value '" + cell + "' at row " + std::to_string(curr_bs+1)); 
+        }
+        
+        // remaining 784 entries are the pixel values
+        int pixel_idx = 0;  
+        while(std::getline(lineStream, cell, ',')) {
+        try {
+            images.push_back(std::stof(cell) / 255.0); // scale to [0,1]
+        } catch (const std::exception& e) {
+            throw std::runtime_error("invalid pixel value '" + cell + "' at row " + std::to_string(curr_bs+1) + ", column " + std::to_string(pixel_idx+1));
+        }
+        pixel_idx++;
+    }
+
+    if (pixel_idx != 784) {
+      throw std::runtime_error("expected 784 pixel values but got " + std::to_string(pixel_idx) + " at row " + std::to_string(curr_bs+1));
+    }
+    
+    curr_bs++;  
+  }
+
+    array x = array(images.data(), {curr_bs, 784});
+    array y = array(labels.data(), {curr_bs});
+    return {x,y};
+}
+
+void test_mnist() {
+    mlx::core::set_default_device(Device::gpu);
+    MLPNet mlp;
+    AdamOptimizer opt(0.001f);
+    opt.init(mlp.parameters());
+
+    int batch_size = 1024;  // smaller batch to start
+    int num_train_iters = 10000;
+    int log_interval = 1;  // more frequent logging
+
+    auto loss_fn = [&](const std::vector<array>& param_arrays) {
+        auto param_map = mlp.parameters();
+        int i = 0;
+        for (auto& [name, param_opt] : param_map) {
+            if (param_opt.has_value()) {
+                param_opt = param_arrays[i++];
+            }
+        }
+        
+        mlp.update(param_map);
+        
+        auto [x, y_indices] = load_batch(train_file, batch_size);
+        array y = one_hot(y_indices, 10);
+        array logits = mlp.forward(x);
+        array log_probs = log(logits + 1e-10);
+        array prod = multiply(y, log_probs);
+        array summed = sum(prod, -1);
+        array loss = -mean(summed);
+        return std::vector<array>{loss};
+    };
+
+    for (int step = 1; step <= num_train_iters; step++) {
+        std::vector<array> param_arrays;
+        std::vector<int> argnums;
+        int param_idx = 0;
+        
+        for (const auto& [name, param_opt] : mlp.parameters()) {
+            if (param_opt.has_value()) {
+                param_arrays.push_back(param_opt.value());
+                argnums.push_back(param_idx);
+                param_idx++;
+            }
+        }
+
+        auto grad_fn = mlx::core::value_and_grad(loss_fn, argnums);
+        auto [losses, grads] = grad_fn(param_arrays);
+        array loss_val = losses[0];
+
+        std::map<std::string, std::optional<array>> grad_map;
+        int i = 0;
+        for (const auto& [name, param_opt] : mlp.parameters()) {
+            if (param_opt.has_value()) {
+                grad_map[name] = grads[i++];
+            }
+        }
+
+        opt.update(mlp, grad_map);
+        eval(loss_val);  // make sure we eval loss
+
+        if (step % log_interval == 0) {
+            auto [test_x, test_y_indices] = load_batch(test_file, batch_size);
+            array test_preds = mlp.forward(test_x);
+            array pred_indices = argmax(test_preds, -1);
+            array accuracy = mean(astype(equal(pred_indices, test_y_indices), float32));
+            
+            eval(accuracy);
+            
+            std::cout << "step " << step 
+                << " loss: " << loss_val.item<float>()
+                << " test accuracy: " << accuracy.item<float>() 
+                << std::endl;
+        }
+    }
+}

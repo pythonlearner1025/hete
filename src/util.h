@@ -3,40 +3,27 @@
 #include <torch/torch.h>
 #include "engine.h"
 #include "debug.h"
+#include <mlx/mlx.h>
 #include <array>
 #include <numeric>
 #include <algorithm>
 #include <cmath>
 
-struct State {
-    std::array<int, 2> hand{};
-    std::array<int, 3> flop{};
-    std::array<int, 1> turn{};
-    std::array<int, 1> river{};
-    std::array<double, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_fracs{};
-    std::array<int, NUM_PLAYERS * MAX_ROUND_BETS * 4> bet_status{};
-};
+std::vector<float> get_bets(PokerEngine& engine);
 
-void update_tensors(
-    const State S, 
-    torch::Tensor hand, 
-    torch::Tensor flop, 
-    torch::Tensor turn, 
-    torch::Tensor river, 
-    torch::Tensor bet_fracs, 
-    torch::Tensor bet_status,
-    int batch = 0 
-);
+struct State {
+    std::vector<float> hands;
+    std::vector<float> bets;
+};
 
 void get_state(
     PokerEngine& game,
     State* state,
     int player
 );
-
 float sample_uniform(); 
-std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta); 
-std::array<double, NUM_ACTIONS> regret_match(const torch::Tensor& logits);
+std::array<double, NUM_ACTIONS> sample_prob(const mlx::core::array logits); 
+std::array<double, NUM_ACTIONS> regret_match(const mlx::core::array logits);
 
 template <typename T, std::size_t N>
 std::array<T, N> normalize_to_prob_dist(const std::array<T, N>& arr) {
@@ -62,16 +49,7 @@ std::size_t argmax(const std::array<T, N>& arr) {
 int sample_action(const std::array<double, NUM_ACTIONS>& strat);
 int sample_iter(size_t iter);
 void take_action(PokerEngine* engine, int player, int act);
-bool verify_action(PokerEngine* engine, int player, int act);
-
-torch::Tensor regret_match_batched(const torch::Tensor& batched_logits);
-
-torch::Tensor init_batched_hands(int BS);
-torch::Tensor init_batched_flops(int BS);
-torch::Tensor init_batched_turns(int BS);
-torch::Tensor init_batched_rivers(int BS);
-torch::Tensor init_batched_status(int BS);
-torch::Tensor init_batched_fracs(int BS);
-torch::Tensor init_batched_advs(int BS);
-torch::Tensor init_batched_iters(int BS);
+bool verify_action(PokerEngine* engine, int player, int act, std::string logfile);
+void save_model(std::map<std::string, std::optional<mlx::core::array>> params, const std::string& filepath);
+std::map<std::string, std::optional<mlx::core::array>> load_model(const std::string& filepath);
 #endif

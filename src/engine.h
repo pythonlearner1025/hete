@@ -40,9 +40,10 @@ public:
     // action verification functions
     bool can_fold(int player) const;
     bool can_check_or_call(int player) const;
-    bool can_bet_or_raise(int player, double amount) const;
+    bool can_bet_or_raise(int player, double amount, std::string logfile) const; 
 
     // Actions
+    void all_in(int player);
     void fold(int player);
     void bet_or_raise(int player, double amount);
     void check_or_call(int player);
@@ -83,14 +84,19 @@ public:
 
     std::array<Player, NUM_PLAYERS> players;
 
+    double small_blind;
+    double big_blind;
+
     PokerEngine(const PokerEngine& other);
     PokerEngine& operator=(const PokerEngine& other);
     PokerEngine copy() const;
 private:
+    static std::random_device rd;  // static class member for global seed source
+    static std::mt19937 master_rng; // master rng that seeds instance rngs
+    std::mt19937 rng; // instance-specific rng
+
     // member variables
     int n_players;
-    double small_blind;
-    double big_blind;
     int round;
     int actor;
     int bet_idx;
@@ -101,7 +107,6 @@ private:
     std::array<double, NUM_PLAYERS> payoffs;
     std::array<int, 5> board; 
     std::array<int, 52> deck;
-    std::mt19937 rng;
 
     // Game flow
     void deal_cards();
