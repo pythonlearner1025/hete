@@ -30,24 +30,38 @@ There's work to do.
 
 There are two dependencies, OMPEval and mlx.
 
-clone mlx:
+```
+git clone https://github.com/pythonlearner1025/hete.git && 
+cd hete  
+```
 
-```git submodule update --init --recursive```
+clone and build OMPEval in /hete:
 
-build OMPEval:
+```
+git clone https://github.com/pythonlearner1025/OMPEval.git &&
+cd OMPEval &&
+make
+```
 
-```cd OMPEval && make```
+clone and build mlx in /hete:
 
+```
+git clone https://github.com/ml-explore/mlx.git && 
+cd mlx &&
+mkdir -p build && cd build && 
+cmake .. && make -j 
+```
 
-get libtorch cpu only version from https://pytorch.org/
+then install mlx:
+```make install```
 
-update /path/to/libtorch in CMakeLists.txt to your libtorch path
+then, build hete in /hete:
 
-```set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/path/to/libtorch")```
+```mkdir build && cd build && cmake ..```
 
-then, build the lib:
+finally, set your training parameters in constants.h and run:
 
-```mkdir build && cd build && cmake .. && make```
+```make && ./main```
 
 building the python extension:
 
@@ -61,4 +75,16 @@ To train a neural network using Deep-CFR, set your parameters in constants.h and
 
 # evaluating
 
-Install the required pip dependencies and run eval.py to play a trained model against slumbot. The code can optionally save/stream performance against slumbot to local file or wandb.
+Make a virtual env in /hete and activate it
+
+```python -m venv env && . env/bin/activate```
+
+Install the required dependencies
+
+```pip install -r requirements.txt```
+
+Run eval.py to automatically pit the most recently trained model against slumbot at slumbot.com for 1000 hands (you need trained models for both player 1 and player 2).   
+
+```python eval.py --wandb 0 --num_hands 1000 --auto 1```
+
+Optionally stream performance to wandb with ```--wandb 1```

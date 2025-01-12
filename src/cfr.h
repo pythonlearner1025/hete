@@ -4,7 +4,6 @@
 #include <vector>
 #include <mutex>
 #include <tuple>
-#include <torch/torch.h>
 #include "engine.h"
 #include "constants.h"
 #include "util.h"

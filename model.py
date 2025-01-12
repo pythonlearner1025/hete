@@ -1,13 +1,12 @@
 import mlx.core as mx
 import mlx.python.mlx.nn as nn
 import mlx.python.mlx.optimizers as optim
-from typing import Optional
-from dataclasses import dataclass
-
-
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
+
+from typing import Optional
+from dataclasses import dataclass
 from dataclasses import dataclass
 from typing import List, Optional
 

@@ -151,17 +151,6 @@ array regret_match_batched(const mlx::core::array logits) {
 
   return probs;
 }
-// Must return a probability distribution
-std::array<double, NUM_ACTIONS> sample_prob(const torch::Tensor& logits, float beta) {
-    double logits_sum = logits.sum().item<double>() + beta;
-    std::array<double, NUM_ACTIONS> strat{};
-    auto strategy_tensor = (logits+beta) / logits_sum;
-    auto strat_data = strategy_tensor.data_ptr<float>();
-    for (int i = 0; i < NUM_ACTIONS; ++i) {
-        strat[i] = strat_data[i];
-    }
-    return strat;
-}
 
 void save_model(std::map<std::string, std::optional<mlx::core::array>> params, const std::string& filepath) {
     std::unordered_map<std::string, array> save_map;

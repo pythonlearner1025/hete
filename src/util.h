@@ -1,6 +1,5 @@
 #ifndef UTIL_H
 #define UTIL_H
-#include <torch/torch.h>
 #include "engine.h"
 #include "debug.h"
 #include <mlx/mlx.h>

@@ -1,8 +1,5 @@
 #include "cfr.h"
 #include "debug.h"
-#include <torch/torch.h>
-#include <torch/script.h>
-#include <torch/cuda.h>
 #include <tuple>
 #include <thread>
 #include <atomic>
@@ -26,8 +23,6 @@ std::array<std::mutex, NUM_PLAYERS> player_advs_mutex;
 std::array<std::vector<TraverseAdvantage>, NUM_PLAYERS> global_player_advs{};
 std::array<std::atomic<size_t>, NUM_PLAYERS> total_advs{};
 std::atomic<size_t> cfr_iter_advs(0);
-torch::Device cpu_device(torch::kCPU);
-torch::Device gpu_device(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU, 0);
 constexpr double NULL_VALUE = -42.0;
 
 void safe_add_advantage(int player, const TraverseAdvantage& adv, std::mt19937& rng) {
@@ -133,42 +128,6 @@ std::string format_array(const std::array<double, NUM_ACTIONS>& arr) {
     return ss.str();
 }
 
-
-std::string format_tensor(const torch::Tensor& tensor) {
-    std::stringstream ss;
-    ss << std::fixed << std::setprecision(4);
-    
-    // Handle 0-dim tensor
-    if (tensor.dim() == 0) {
-        ss << tensor.item<float>();
-        return ss.str();
-    }
-    
-    ss << "[";
-    
-    // Handle 1-dim tensor
-    if (tensor.dim() == 1) {
-        for (int64_t i = 0; i < tensor.size(0); i++) {
-            ss << tensor[i].item<float>();
-            if (i < tensor.size(0) - 1) ss << ", ";
-        }
-    }
-    // Handle 2-dim tensor 
-    else if (tensor.dim() == 2) {
-        for (int64_t i = 0; i < tensor.size(0); i++) {
-            ss << "[";
-            for (int64_t j = 0; j < tensor.size(1); j++) {
-                ss << tensor[i][j].item<float>();
-                if (j < tensor.size(1) - 1) ss << ", ";
-            }
-            ss << "]";
-            if (i < tensor.size(0) - 1) ss << ", ";
-        }
-    }
-    
-    ss << "]";
-    return ss.str();
-}
 
 double logarithmic_smoothing(double x_start, double x_end, int t, int max_steps) {
     // Prevent division by zero and log(0)
@@ -394,13 +353,6 @@ void outcome_sampling(
                         safe_add_advantage(traversing_player, adv, rng);
                     }
                     return u;
-                } catch (const c10::Error& e) {
-                    DEBUG_NONE("torch error in forward pass: " << e.what());
-                    DEBUG_NONE("msg: " << e.msg());  
-                    throw;
-                } catch (const std::exception& e) {
-                    DEBUG_NONE("error in forward pass: " << e.what());
-                    throw;
                 } catch (...) {
                     DEBUG_NONE("unknown error in forward pass");
                     throw;
@@ -443,10 +395,6 @@ void outcome_sampling(
                     double u = cfr(engine, traversing_player, next_player, player_reach, new_opp_reach, new_opp_reach, depth + 1);
 
                     return u;
-                } catch (const c10::Error& e) {
-                    DEBUG_NONE("torch error in forward pass: " << e.what());
-                    DEBUG_NONE("msg: " << e.msg());  
-                    throw;
                 } catch (const std::exception& e) {
                     DEBUG_NONE("error in forward pass: " << e.what());
                     throw;

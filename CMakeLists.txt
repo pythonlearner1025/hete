@@ -3,10 +3,10 @@ project(PokerProject)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
-
 
 # Option 1: Using add_compile_options
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -20,19 +20,12 @@ if(APPLE)
    find_package(BLAS REQUIRED)
 endif()
 
-# removed old mlx stuff
-if(UNIX AND NOT APPLE)
-    set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/home/minjunes/libtorch")
-elseif(APPLE)
-    set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} "/Users/minjunes/libtorch")
-endif()
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/OMPEval)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/OMPEval/lib)
+find_library(OMPEVAL_LIB ompeval PATHS ${CMAKE_CURRENT_SOURCE_DIR}/OMPEval/lib NO_DEFAULT_PATH)
 
-find_package(Torch REQUIRED)
-include_directories(${CMAKE_SOURCE_DIR}/OMPEval)
-link_directories(${CMAKE_SOURCE_DIR}/OMPEval/lib)
-find_library(OMPEVAL_LIB ompeval PATHS ${CMAKE_SOURCE_DIR}/OMPEval/lib NO_DEFAULT_PATH)
 if(NOT OMPEVAL_LIB)
-  message(FATAL_ERROR "OMPEval library not found in ${CMAKE_SOURCE_DIR}/OMPEval/lib")
+  message(FATAL_ERROR "OMPEval library not found in ${CMAKE_CURRENT_SOURCE_DIR}/OMPEval/lib")
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -52,47 +45,44 @@ else()
 endif()
 
 file(GLOB_RECURSE NON_MODEL_SRCS 
-    "${CMAKE_SOURCE_DIR}/src/*.cpp" 
-    "${CMAKE_SOURCE_DIR}/src/*.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cxx"
 )
-list(FILTER NON_MODEL_SRCS EXCLUDE REGEX "${CMAKE_SOURCE_DIR}/src/tests/.*")
-list(APPEND MODEL_SRCS "${CMAKE_SOURCE_DIR}/src/model/model.h")
+list(FILTER NON_MODEL_SRCS EXCLUDE REGEX "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/.*")
+list(APPEND MODEL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/model/model.h")
 set(ALL_SRCS ${NON_MODEL_SRCS} ${MODEL_SRCS})
-
 add_executable(main ${ALL_SRCS})
-
 
 # mlx config
 if(APPLE)
-    include_directories(
-      /Users/minjunes/hete/mlx  # this is where mlx.h lives
+    set(MLX_DIR ${CMAKE_CURRENT_SOURCE_DIR}/mlx)
+    include_directories(${MLX_DIR})
+    target_link_libraries(main PRIVATE 
+        ${MLX_DIR}/build/libmlx.a
+        ${OMPEVAL_LIB} 
+        "${TORCH_LIBRARIES}" 
+        ${OPENMP_LIB}
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalKit"
+        "-framework Accelerate" 
+        "-framework CoreFoundation"
+        ${BLAS_LIBRARIES}
     )
-   target_link_libraries(main PRIVATE 
-       /Users/minjunes/hete/mlx/build/libmlx.a
-       ${OMPEVAL_LIB} 
-       "${TORCH_LIBRARIES}" 
-       ${OPENMP_LIB}
-       "-framework Foundation"
-       "-framework Metal"
-       "-framework MetalKit"
-       "-framework Accelerate" 
-       "-framework CoreFoundation"
-       ${BLAS_LIBRARIES}
-   )
 else()
-   target_link_libraries(main PRIVATE
-       ${OMPEVAL_LIB} 
-       "${TORCH_LIBRARIES}" 
-       ${OPENMP_LIB}
-   )
+    target_link_libraries(main PRIVATE
+        ${OMPEVAL_LIB} 
+        "${TORCH_LIBRARIES}" 
+        ${OPENMP_LIB}
+    )
 endif()
 
 target_compile_options(main PRIVATE "${TORCH_CXX_FLAGS}")
 
 if(APPLE)
   set_target_properties(main PROPERTIES
-      BUILD_RPATH "${OPENMP_LIB_DIR};/Users/minjunes/libtorch/lib"
-      INSTALL_RPATH "${OPENMP_LIB_DIR};/Users/minjunes/libtorch/lib"
+      BUILD_RPATH "${OPENMP_LIB_DIR};${Torch_DIR}/../lib"
+      INSTALL_RPATH "${OPENMP_LIB_DIR};${Torch_DIR}/../lib"
       CXX_VISIBILITY_PRESET hidden
       CXX_STANDARD_REQUIRED ON
       CXX_EXTENSIONS OFF
