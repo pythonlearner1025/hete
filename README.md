@@ -37,10 +37,11 @@ install dependencies:
 ```
 git clone https://github.com/pythonlearner1025/OMPEval.git &&
 cd OMPEval &&
+make clean &&
 make
 ```
 
-2. build and install mlx:
+2. build and install mlx (might have to sudo make install):
 ```
 git clone https://github.com/ml-explore/mlx.git && 
 cd mlx &&
@@ -54,20 +55,15 @@ make install
 mkdir build && cd build && cmake ..
 ```
 
-4. build python extension:
-```
-python setup.py build_ext --inplace
-```
-
 ## Training
-set your parameters in constants.h and run:
+set your parameters in hete/src/constants.h and run:
 ```
 make && ./main
 ```
 
 trained models will be saved under:
 ```
-/hete/out/<timestamp>/<cfr_iteration_index>/<player_index>
+hete/out/<timestamp>/<cfr_iteration_index>/<player_index>
 ```
 
 ## Evaluation
