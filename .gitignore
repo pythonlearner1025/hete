@@ -24,6 +24,7 @@ llama.cpp/
 
 # ignore 
 *.deb
+*.DS_Store
 src/model/model
 src/model/CMakeFiles
 src/models/CMakeCache.txt
