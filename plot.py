@@ -116,7 +116,6 @@ def main():
     if not log_path:
         log_path = os.path.join('./out',sorted(os.listdir('out'))[-1])
     plot_eval(f'{log_path}/eval.log')
-    #plot_train(f'{log_path}/train.log')
 
 if __name__ == "__main__":
     main()
